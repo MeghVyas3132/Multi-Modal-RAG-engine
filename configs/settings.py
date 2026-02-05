@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     otel_service_name: str = Field(default="clip-image-search")
     otel_sample_rate: float = Field(default=1.0, description="Trace sampling rate (0.0 to 1.0)")
 
+    # ── Auth / Rate Limiting ────────────────────────────────
+    auth_enabled: bool = Field(default=False, description="Enable API key authentication")
+    api_keys: str = Field(default="", description="Comma-separated valid API keys")
+    rate_limit_enabled: bool = Field(default=False, description="Enable per-key rate limiting")
+    rate_limit_requests: int = Field(default=100, description="Max requests per window per key")
+    rate_limit_window_seconds: int = Field(default=60, description="Rate limit window in seconds")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
