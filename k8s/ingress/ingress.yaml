@@ -1,0 +1,40 @@
+# ================================================================
+# Ingress -- Routes external traffic to the API service
+#
+# Assumes nginx-ingress controller is installed.
+# TLS is configured via cert-manager with Let's Encrypt.
+# ================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-ingress
+  namespace: rag-system
+  labels:
+    app: api
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    # TLS via cert-manager (uncomment when ready)
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.clip-search.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+  # TLS configuration (uncomment when domain and cert-manager are ready)
+  # tls:
+  #   - hosts:
+  #       - api.clip-search.example.com
+  #     secretName: api-tls-cert
