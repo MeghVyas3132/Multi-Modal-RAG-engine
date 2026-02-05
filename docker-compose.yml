@@ -26,9 +26,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_ENABLED: "true"
-      FORCE_CPU: "false"
-    env_file:
-      - .env
+      FORCE_CPU: "true"
+      LLM_ENABLED: "false"
     depends_on:
       qdrant:
         condition: service_healthy
