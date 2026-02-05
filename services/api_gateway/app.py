@@ -33,7 +33,7 @@ from utils.logger import setup_logging, get_logger
 from utils.metrics import metrics
 from utils.timing import timed
 
-from services.embedding_service.embedder import create_embedder, get_embedder
+from services.embedding_service import create_embedder_auto
 from services.retrieval_service.retriever import create_retriever, get_retriever
 from services.api_gateway.models import (
     SearchRequest,
@@ -50,24 +50,35 @@ _log = get_logger(__name__)
 # Size 4 is enough — each search is ~5ms, so 4 threads handle ~800 QPS.
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="qdrant")
 
+# Module-level reference to the active embedder (PyTorch or ONNX).
+# Set at startup by the lifespan hook. Used by /search and /health.
+_active_embedder = None
+
 
 # ── Lifespan: startup + shutdown ────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Startup: load CLIP, connect to Qdrant, warm everything.
+    Startup: load CLIP (PyTorch or ONNX), connect to Qdrant, warm everything.
     Shutdown: clean up thread pool.
     """
+    global _active_embedder
+
     setup_logging(level="INFO")
     _log.info("startup_begin")
 
     cfg = get_settings()
 
-    # 1. Load CLIP model (takes ~4s for ViT-H-14)
+    # 1. Load embedding model via factory (selects PyTorch or ONNX)
     with timed("startup_clip_load"):
-        embedder = create_embedder()
-    _log.info("clip_ready", device=str(embedder.device), dim=embedder.vector_dim)
+        _active_embedder = create_embedder_auto()
+    _log.info(
+        "embedder_ready",
+        backend="onnx" if cfg.use_onnx else "pytorch",
+        device=str(_active_embedder.device),
+        dim=_active_embedder.vector_dim,
+    )
 
     # 2. Connect to Qdrant and ensure collection exists
     with timed("startup_qdrant_connect"):
@@ -136,7 +147,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         )
 
     # ── Embed query ─────────────────────────────────────────
-    embedder = get_embedder()
+    embedder = _active_embedder
     with timed("search_embedding") as embed_t:
         query_vector = embedder.encode_text(request.query)
 
@@ -211,9 +222,9 @@ async def health() -> HealthResponse:
     Used by Docker health checks and load balancers.
     """
     try:
-        embedder = get_embedder()
-        clip_ok = embedder.is_ready
-        device = str(embedder.device)
+        embedder = _active_embedder
+        clip_ok = embedder is not None and embedder.is_ready
+        device = str(embedder.device) if embedder else "unknown"
     except Exception:
         clip_ok = False
         device = "unknown"
