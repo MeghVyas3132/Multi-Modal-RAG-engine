@@ -89,6 +89,22 @@ async def lifespan(app: FastAPI):
     # 3. Initialize Redis cache (optional, fail-open)
     init_cache()
 
+    # 4. Setup OpenTelemetry instrumentation if enabled
+    if cfg.otel_enabled:
+        try:
+            from services.api_gateway.telemetry import setup_telemetry
+            setup_telemetry(app)
+            _log.info("otel_ready", endpoint=cfg.otel_endpoint)
+        except Exception as e:
+            _log.warning("otel_setup_failed", error=str(e))
+
+    # 5. Setup auth and rate limiting middleware
+    try:
+        from services.api_gateway.middleware import setup_security
+        setup_security(app)
+    except Exception as e:
+        _log.warning("security_setup_failed", error=str(e))
+
     _log.info("startup_complete")
 
     yield  # ← Application runs here
