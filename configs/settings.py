@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     onnx_execution_mode: str = Field(default="parallel", description="ORT execution mode: parallel or sequential")
     use_fp16: bool = Field(default=False, description="Use FP16 quantized ONNX model")
 
+    # ── Observability ──────────────────────────────────────
+    otel_enabled: bool = Field(default=False, description="Enable OpenTelemetry tracing and metrics")
+    otel_endpoint: str = Field(default="http://localhost:4317", description="OTLP gRPC endpoint")
+    otel_service_name: str = Field(default="clip-image-search")
+    otel_sample_rate: float = Field(default=1.0, description="Trace sampling rate (0.0 to 1.0)")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
