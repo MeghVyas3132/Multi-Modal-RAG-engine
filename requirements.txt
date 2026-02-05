@@ -19,6 +19,10 @@ qdrant-client==1.13.2
 # ── Cache ───────────────────────────────────────────────────
 redis>=5.0.0
 
+# ── ONNX Runtime (optional, set USE_ONNX=true to enable) ──
+onnx==1.17.0
+onnxruntime==1.19.2
+
 # ── Observability ──────────────────────────────────────────
 structlog>=24.0.0
 
