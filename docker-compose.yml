@@ -1,0 +1,88 @@
+# ================================================================
+# Docker Compose -- Full Stack
+#
+# Services:
+#   app     -- FastAPI RAG search API (CLIP + uvicorn)
+#   qdrant  -- Vector DB with HNSW index, in-memory mode
+#   redis   -- Query result cache (LRU, ephemeral)
+#
+# Usage:
+#   docker compose up -d
+#   docker compose down -v
+# ================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_GRPC_PORT: 6334
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_ENABLED: "true"
+      FORCE_CPU: "false"
+    env_file:
+      - .env
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # CLIP ViT-H-14 requires ~2GB RAM + PyTorch overhead
+          memory: 4G
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      # Force all data into RAM for sub-10ms search latency.
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "false"
+      QDRANT__STORAGE__PERFORMANCE__OPTIMIZER_CPU_BUDGET: "0"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          # 1M vectors with int8 quantization: ~1GB vectors + ~1GB HNSW graph
+          memory: 6G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+    driver: local
