@@ -1,0 +1,58 @@
+# ================================================================
+# ConfigMap -- Non-sensitive configuration for all services
+# ================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-config
+  namespace: rag-system
+  labels:
+    app.kubernetes.io/part-of: clip-image-search
+data:
+  # CLIP model
+  CLIP_MODEL_NAME: "ViT-H-14"
+  CLIP_PRETRAINED: "laion2b_s32b_b79k"
+  CLIP_VECTOR_DIM: "1024"
+  FORCE_CPU: "true"
+
+  # Qdrant
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  QDRANT_GRPC_PORT: "6334"
+  QDRANT_COLLECTION: "image_vectors"
+  QDRANT_HNSW_M: "16"
+  QDRANT_HNSW_EF_CONSTRUCT: "200"
+  QDRANT_HNSW_EF: "128"
+
+  # Redis
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_ENABLED: "true"
+  REDIS_CACHE_TTL: "3600"
+
+  # API
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  API_WORKERS: "1"
+
+  # ONNX Runtime
+  USE_ONNX: "false"
+  ONNX_MODEL_PATH: "models/onnx/clip_vit_h14_text_fp32.onnx"
+  ONNX_PROVIDERS: "CPUExecutionProvider"
+  ONNX_INTRA_OP_THREADS: "4"
+  ONNX_INTER_OP_THREADS: "2"
+
+  # LLM
+  LLM_ENABLED: "false"
+
+  # Observability
+  OTEL_ENABLED: "false"
+  OTEL_ENDPOINT: "http://otel-collector:4317"
+  OTEL_SERVICE_NAME: "clip-image-search"
+  OTEL_SAMPLE_RATE: "1.0"
+
+  # Auth
+  AUTH_ENABLED: "false"
+  RATE_LIMIT_ENABLED: "false"
+  RATE_LIMIT_REQUESTS: "100"
+  RATE_LIMIT_WINDOW_SECONDS: "60"
