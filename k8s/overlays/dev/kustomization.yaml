@@ -1,0 +1,58 @@
+# ================================================================
+# Dev overlay -- minimal resources, debug logging, no auth
+# ================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: rag-system
+
+patches:
+  # Scale down API to 1 replica in dev
+  - target:
+      kind: Deployment
+      name: api
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # Reduce resource limits in dev
+  - target:
+      kind: Deployment
+      name: api
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "250m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "4Gi"
+
+  # Disable HPA in dev
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: api-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
+
+configMapGenerator:
+  - name: rag-config
+    behavior: merge
+    literals:
+      - OTEL_ENABLED=false
+      - AUTH_ENABLED=false
+      - RATE_LIMIT_ENABLED=false

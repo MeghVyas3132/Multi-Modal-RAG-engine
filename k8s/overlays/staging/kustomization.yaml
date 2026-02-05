@@ -1,0 +1,42 @@
+# ================================================================
+# Staging overlay -- production-like but smaller scale
+# ================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: rag-system
+
+patches:
+  # 2 replicas in staging
+  - target:
+      kind: Deployment
+      name: api
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+  # Scale HPA range for staging
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: api-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 4
+
+configMapGenerator:
+  - name: rag-config
+    behavior: merge
+    literals:
+      - OTEL_ENABLED=true
+      - OTEL_SAMPLE_RATE=0.5
+      - AUTH_ENABLED=true
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS=200
