@@ -1,4 +1,4 @@
-# Multi-Modal RAG Image Search Engine# Multi-Modal RAG Image Search Engine# 🔍 Multi-Modal RAG Image Search Engine
+# Multi-Modal RAG Image Search Engine
 
 
 
