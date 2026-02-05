@@ -8,6 +8,9 @@
 # The image runs a single uvicorn worker. CLIP model is loaded
 # into memory at startup. Scale horizontally with replicas,
 # not vertically with multiple workers.
+#
+# ONNX Runtime is included for optional accelerated inference.
+# Set USE_ONNX=true and mount the ONNX model to enable.
 # ================================================================
 
 FROM python:3.11-slim AS base
@@ -21,7 +24,7 @@ WORKDIR /app
 # ── Stage 1: Dependencies ──────────────────────────────────
 FROM base AS deps
 
-# System dependencies required by PyTorch, Pillow, and gRPC
+# System dependencies required by PyTorch, Pillow, gRPC, and ONNX Runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
@@ -53,13 +56,15 @@ COPY services/ ./services/
 COPY indexing/ ./indexing/
 COPY scripts/ ./scripts/
 COPY utils/ ./utils/
-COPY .env.example ./.env.example
+
+# Create models directory for ONNX models (mount at runtime)
+RUN mkdir -p models/onnx
 
 # Default port
 EXPOSE 8000
 
 # Health check against the /health endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Single worker -- CLIP model lives in this process.
