@@ -1,0 +1,203 @@
+# ================================================================
+# Prometheus -- scrapes metrics from OTel Collector's Prometheus
+# exporter and API /stats endpoint for custom metrics.
+#
+# Alert rules:
+#   - High P95 latency (>200ms for 5 minutes)
+#   - Error rate >5% over 5 minutes
+#   - Pod restarts >3 in 10 minutes
+# ================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: rag-system
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - /etc/prometheus/alerts.yml
+
+    scrape_configs:
+      # Scrape OTel Collector Prometheus exporter
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector:8889"]
+            labels:
+              service: otel-collector
+
+      # Scrape Kubernetes pods with prometheus.io annotations
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - rag-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+  alerts.yml: |
+    groups:
+      - name: rag-system-alerts
+        rules:
+          # High search latency
+          - alert: HighSearchLatency
+            expr: histogram_quantile(0.95, sum(rate(rag_search_latency_bucket[5m])) by (le)) > 200
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Search P95 latency exceeds 200ms"
+              description: "P95 search latency is {{ $value }}ms for the last 5 minutes."
+
+          # High error rate
+          - alert: HighErrorRate
+            expr: sum(rate(rag_errors_total[5m])) / sum(rate(rag_search_requests_total[5m])) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Error rate exceeds 5%"
+              description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+          # Pod crash loop
+          - alert: PodCrashLoop
+            expr: increase(kube_pod_container_status_restarts_total{namespace="rag-system"}[10m]) > 3
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Pod {{ $labels.pod }} is crash-looping"
+              description: "Pod restarted {{ $value }} times in the last 10 minutes."
+
+          # Qdrant down
+          - alert: QdrantDown
+            expr: up{job="qdrant"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Qdrant is unreachable"
+
+          # Redis cache down
+          - alert: RedisCacheDown
+            expr: up{job="redis"} == 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis cache is down (search still functional)"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: rag-system
+  labels:
+    app: prometheus
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=7d
+            - --storage.tsdb.retention.size=5GB
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: rag-system
+  labels:
+    app: prometheus
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+  selector:
+    app: prometheus
+
+---
+# ServiceAccount for Prometheus to scrape Kubernetes metrics
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: rag-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-rag-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-rag-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-rag-system
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: rag-system
