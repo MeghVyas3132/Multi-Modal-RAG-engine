@@ -1,0 +1,82 @@
+# ================================================================
+# Qdrant StatefulSet -- persistent vector database
+#
+# StatefulSet (not Deployment) because:
+#   - Stable network identity for gRPC connections
+#   - Persistent storage survives pod restarts
+#   - Ordered scaling for cluster mode (future)
+# ================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: rag-system
+  labels:
+    app: qdrant
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/component: vector-database
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.13.2
+          ports:
+            - name: http
+              containerPort: 6333
+              protocol: TCP
+            - name: grpc
+              containerPort: 6334
+              protocol: TCP
+          env:
+            - name: QDRANT__STORAGE__ON_DISK_PAYLOAD
+              value: "false"
+            - name: QDRANT__STORAGE__PERFORMANCE__OPTIMIZER_CPU_BUDGET
+              value: "0"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "6Gi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: qdrant-storage
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: standard
