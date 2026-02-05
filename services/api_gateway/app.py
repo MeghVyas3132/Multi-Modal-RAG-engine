@@ -154,6 +154,16 @@ async def search(request: SearchRequest) -> SearchResponse:
     cached = get_cached(request.query, request.top_k, request.filters)
     if cached:
         metrics.record("total_latency_ms", 0.1)  # Cache hits are ~0.1ms
+        # OTel telemetry for cache hits
+        try:
+            from services.api_gateway.telemetry import (
+                record_cache_hit, record_search_request, record_search_latency,
+            )
+            record_cache_hit()
+            record_search_request(cached=True)
+            record_search_latency(0.1, request.query)
+        except Exception:
+            pass
         return SearchResponse(
             query=request.query,
             results=[SearchResult(**r) for r in cached["results"]],
@@ -187,6 +197,25 @@ async def search(request: SearchRequest) -> SearchResponse:
     total_ms = total_ns / 1_000_000
 
     metrics.record("total_latency_ms", total_ms)
+
+    # OTel telemetry for live searches
+    try:
+        from services.api_gateway.telemetry import (
+            record_search_latency, record_embedding_latency,
+            record_retrieval_latency, record_cache_miss,
+            record_search_request, create_span,
+        )
+        cfg = get_settings()
+        record_cache_miss()
+        record_search_request(cached=False)
+        record_search_latency(total_ms, request.query)
+        record_embedding_latency(
+            embed_t["ms"],
+            backend="onnx" if cfg.use_onnx else "pytorch",
+        )
+        record_retrieval_latency(search_t["ms"], request.top_k)
+    except Exception:
+        pass
 
     response = SearchResponse(
         query=request.query,
