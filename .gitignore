@@ -26,6 +26,12 @@ data/
 *.npy
 *.npz
 
+# ONNX models (too large for git)
+models/onnx/*.onnx
+
+# Benchmark results
+results/
+
 # OS
 .DS_Store
 Thumbs.db
