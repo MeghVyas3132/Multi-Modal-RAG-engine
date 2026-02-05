@@ -33,6 +33,10 @@ opentelemetry-exporter-otlp-proto-grpc>=1.25.0
 opentelemetry-instrumentation-fastapi>=0.46b0
 opentelemetry-instrumentation-logging>=0.46b0
 
+# ── Auth / Rate Limiting ──────────────────────────────
+python-jose[cryptography]>=3.3.0
+slowapi>=0.1.9
+
 # ── Serialization ─────────────────────────────────────
 orjson>=3.9.0
 
