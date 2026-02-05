@@ -23,8 +23,15 @@ redis>=5.0.0
 onnx==1.17.0
 onnxruntime==1.19.2
 
-# ── Observability ──────────────────────────────────────────
+# ── Observability ──────────────────────────────────────
 structlog>=24.0.0
+
+# ── OpenTelemetry ─────────────────────────────────────
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp-proto-grpc>=1.25.0
+opentelemetry-instrumentation-fastapi>=0.46b0
+opentelemetry-instrumentation-logging>=0.46b0
 
 # ── Serialization ─────────────────────────────────────
 orjson>=3.9.0
