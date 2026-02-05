@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     search_top_k: int = Field(default=10)
     search_score_threshold: float = Field(default=0.2)
 
+    # ── ONNX Runtime ───────────────────────────────────────
+    use_onnx: bool = Field(default=False, description="Use ONNX Runtime instead of PyTorch for inference")
+    onnx_model_path: str = Field(default="models/onnx/clip_vit_h14_text_fp32.onnx")
+    onnx_providers: str = Field(default="CPUExecutionProvider", description="Comma-separated ONNX execution providers")
+    onnx_intra_op_threads: int = Field(default=4, description="Threads for intra-operator parallelism")
+    onnx_inter_op_threads: int = Field(default=2, description="Threads for inter-operator parallelism")
+    onnx_execution_mode: str = Field(default="parallel", description="ORT execution mode: parallel or sequential")
+    use_fp16: bool = Field(default=False, description="Use FP16 quantized ONNX model")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
