@@ -1,14 +1,18 @@
 # ================================================================
-# Docker Compose -- Full Stack
+# Docker Compose -- Full Stack (dev/local)
 #
 # Services:
-#   app     -- FastAPI RAG search API (CLIP + uvicorn)
-#   qdrant  -- Vector DB with HNSW index, in-memory mode
-#   redis   -- Query result cache (LRU, ephemeral)
+#   app             -- FastAPI RAG search API (CLIP + uvicorn)
+#   qdrant          -- Vector DB with HNSW index, in-memory mode
+#   redis           -- Query result cache (LRU, ephemeral)
+#   otel-collector  -- OpenTelemetry collector (optional)
+#   prometheus      -- Metrics storage (optional)
+#   grafana         -- Dashboards (optional)
+#   jaeger          -- Distributed tracing (optional)
 #
 # Usage:
-#   docker compose up -d
-#   docker compose down -v
+#   docker compose up -d                    # Core stack only
+#   docker compose --profile monitoring up  # With observability
 # ================================================================
 
 services:
@@ -28,16 +32,28 @@ services:
       REDIS_ENABLED: "true"
       FORCE_CPU: "true"
       LLM_ENABLED: "false"
+      # ONNX Runtime (set to true after running convert_to_onnx)
+      USE_ONNX: "false"
+      ONNX_MODEL_PATH: "models/onnx/clip_vit_h14_text_fp32.onnx"
+      # OpenTelemetry
+      OTEL_ENABLED: "false"
+      OTEL_ENDPOINT: "http://otel-collector:4317"
+      OTEL_SERVICE_NAME: "clip-image-search"
+      # Auth (disabled for local dev)
+      AUTH_ENABLED: "false"
+      RATE_LIMIT_ENABLED: "false"
     depends_on:
       qdrant:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+      - ./models/onnx:/app/models/onnx:ro
     deploy:
       resources:
         limits:
-          # CLIP ViT-H-14 requires ~2GB RAM + PyTorch overhead
-          memory: 4G
+          memory: 6G
     restart: unless-stopped
 
   qdrant:
@@ -58,10 +74,11 @@ services:
           # 1M vectors with int8 quantization: ~1GB vectors + ~1GB HNSW graph
           memory: 6G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   redis:
@@ -82,6 +99,68 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ── Observability Stack (enable with --profile monitoring) ──
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: rag-otel
+    profiles: ["monitoring"]
+    command: ["--config=/etc/otel/collector.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus metrics
+    volumes:
+      - ./k8s/monitoring/otel-collector-config.yaml:/etc/otel/collector.yaml:ro
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: rag-prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./k8s/monitoring/prometheus-config.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: rag-grafana
+    profiles: ["monitoring"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: rag-jaeger
+    profiles: ["monitoring"]
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"  # gRPC from OTel Collector
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
+    driver: local
+  huggingface_cache:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
