@@ -1,0 +1,93 @@
+# ================================================================
+# API Deployment -- CLIP search service
+#
+# Key design decisions:
+#   - 1 container per pod, 1 worker per container (CLIP model in memory)
+#   - Scaling is horizontal via HPA (not vertical with workers)
+#   - Liveness probe: /health endpoint (checks CLIP + Qdrant)
+#   - Readiness probe: same /health but with shorter initial delay
+#   - Resource requests sized for ViT-H-14 (~3GB RAM at peak)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: rag-system
+  labels:
+    app: api
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: api
+        app.kubernetes.io/name: api
+        app.kubernetes.io/component: api-gateway
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          image: clip-image-search:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: rag-config
+            - secretRef:
+                name: rag-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "6Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 300
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: onnx-models
+              mountPath: /app/models/onnx
+              readOnly: true
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-cache-pvc
+        - name: onnx-models
+          emptyDir: {}

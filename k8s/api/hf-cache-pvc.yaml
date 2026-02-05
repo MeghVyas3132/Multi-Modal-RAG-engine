@@ -1,0 +1,14 @@
+# HuggingFace model cache PVC -- persists downloaded CLIP weights
+# across pod restarts to avoid re-downloading 3.9GB on every startup.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hf-cache-pvc
+  namespace: rag-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
