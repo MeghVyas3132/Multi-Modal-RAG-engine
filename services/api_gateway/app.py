@@ -30,6 +30,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 
 from configs.settings import get_settings
 from utils.logger import setup_logging, get_logger
@@ -44,6 +45,8 @@ from services.api_gateway.models import (
     SearchResult,
     HealthResponse,
     StatsResponse,
+    ChatRequest,
+    PDFUploadResponse,
 )
 from services.api_gateway.cache import init_cache, get_cached, set_cached, is_available as redis_available
 
@@ -57,23 +60,27 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="qdrant")
 # Set at startup by the lifespan hook. Used by /search and /health.
 _active_embedder = None
 
+# Module-level reference to the text embedder (sentence-transformers).
+# Set at startup. Used by /upload/pdf and /chat.
+_text_embedder = None
+
 
 # ── Lifespan: startup + shutdown ────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Startup: load CLIP (PyTorch or ONNX), connect to Qdrant, warm everything.
+    Startup: load CLIP (PyTorch or ONNX), text embedder, connect to Qdrant, warm everything.
     Shutdown: clean up thread pool.
     """
-    global _active_embedder
+    global _active_embedder, _text_embedder
 
     setup_logging(level="INFO")
     _log.info("startup_begin")
 
     cfg = get_settings()
 
-    # 1. Load embedding model via factory (selects PyTorch or ONNX)
+    # 1. Load CLIP embedding model via factory (selects PyTorch or ONNX)
     with timed("startup_clip_load"):
         _active_embedder = create_embedder_auto()
     _log.info(
@@ -83,16 +90,23 @@ async def lifespan(app: FastAPI):
         dim=_active_embedder.vector_dim,
     )
 
-    # 2. Connect to Qdrant and ensure collection exists
+    # 2. Load text embedder (sentence-transformers for PDF RAG)
+    with timed("startup_text_embedder_load"):
+        from services.embedding_service.text_embedder import create_text_embedder
+        _text_embedder = create_text_embedder()
+    _log.info("text_embedder_ready", dim=_text_embedder.vector_dim)
+
+    # 3. Connect to Qdrant and ensure both collections exist
     with timed("startup_qdrant_connect"):
         retriever = create_retriever()
         retriever.ensure_collection()
+        retriever.ensure_text_collection()
     _log.info("qdrant_ready")
 
-    # 3. Initialize Redis cache (optional, fail-open)
+    # 4. Initialize Redis cache (optional, fail-open)
     init_cache()
 
-    # 4. Setup OpenTelemetry instrumentation if enabled
+    # 5. Setup OpenTelemetry instrumentation if enabled
     if cfg.otel_enabled:
         try:
             from services.api_gateway.telemetry import setup_telemetry
@@ -101,7 +115,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             _log.warning("otel_setup_failed", error=str(e))
 
-    # 5. Setup auth and rate limiting middleware
+    # 6. Setup auth and rate limiting middleware
     try:
         from services.api_gateway.middleware import setup_security
         setup_security(app)
@@ -121,8 +135,8 @@ async def lifespan(app: FastAPI):
 # ── FastAPI App ─────────────────────────────────────────────
 
 app = FastAPI(
-    title="Multi-Modal RAG Image Search",
-    description="Ultra-low latency text-to-image retrieval with CLIP + HNSW",
+    title="Multi-Modal RAG Engine",
+    description="PDF + Image RAG with Cerebras/Groq LLM streaming",
     version="1.0.0",
     lifespan=lifespan,
     default_response_class=ORJSONResponse,
@@ -407,6 +421,257 @@ async def upload_and_index(
     }
 
 
+# ── PDF Upload + Index ──────────────────────────────────────
+
+@app.post("/upload/pdf", response_model=PDFUploadResponse)
+async def upload_pdf(
+    file: UploadFile = File(...),
+):
+    """
+    Upload a PDF, extract text chunks + images, embed and index into Qdrant.
+    Text chunks → pdf_text_vectors (384-dim all-MiniLM-L6-v2)
+    Images → image_vectors (512-dim CLIP ViT-B-32)
+    """
+    from services.pdf_service.parser import parse_pdf, save_extracted_images
+
+    total_start = time.perf_counter_ns()
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    # Save uploaded PDF to disk
+    cfg = get_settings()
+    pdf_dir = Path(cfg.pdf_upload_dir)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    save_path = pdf_dir / file.filename
+    contents = await file.read()
+    save_path.write_bytes(contents)
+
+    loop = asyncio.get_event_loop()
+
+    def _process_pdf():
+        # 1. Parse PDF → text chunks + images
+        result = parse_pdf(save_path)
+
+        chunks_indexed = 0
+        images_indexed = 0
+
+        # 2. Embed and index text chunks
+        if result.chunks:
+            text_embedder = _text_embedder
+            texts = [c.text for c in result.chunks]
+            vectors = text_embedder.encode_batch(texts)
+
+            # Generate deterministic IDs
+            ids = []
+            payloads = []
+            for i, chunk in enumerate(result.chunks):
+                chunk_id_str = f"{file.filename}:chunk:{chunk.chunk_index}"
+                point_id = int(
+                    hashlib.md5(chunk_id_str.encode()).hexdigest()[:15], 16
+                )
+                ids.append(point_id)
+                payloads.append({
+                    "text": chunk.text,
+                    "page_num": chunk.page_num,
+                    "chunk_index": chunk.chunk_index,
+                    "source_pdf": chunk.source_pdf,
+                    "char_start": chunk.char_start,
+                    "char_end": chunk.char_end,
+                    "type": "text_chunk",
+                })
+
+            retriever = get_retriever()
+            retriever.upsert_text_batch(ids, vectors, payloads)
+            chunks_indexed = len(ids)
+
+        # 3. Embed and index extracted images
+        if result.images:
+            saved_paths = save_extracted_images(
+                result.images, _data_dir / "pdf_images", file.filename
+            )
+
+            from PIL import Image as PILImage
+
+            embedder = _active_embedder
+            batch_images = []
+            batch_ids = []
+            batch_payloads = []
+
+            for img_data, img_path in zip(result.images, saved_paths):
+                try:
+                    pil_img = PILImage.open(img_path).convert("RGB")
+                    preprocessed = embedder.preprocess(pil_img)
+                    batch_images.append(preprocessed)
+
+                    img_id_str = f"{file.filename}:img:{img_data.page_num}:{img_data.image_index}"
+                    point_id = int(
+                        hashlib.md5(img_id_str.encode()).hexdigest()[:15], 16
+                    )
+                    batch_ids.append(point_id)
+                    batch_payloads.append({
+                        "file_path": str(img_path.relative_to(_data_dir.parent)),
+                        "file_name": img_path.name,
+                        "source_pdf": file.filename,
+                        "page_num": img_data.page_num,
+                        "width": img_data.width,
+                        "height": img_data.height,
+                        "type": "pdf_image",
+                    })
+                except Exception as e:
+                    _log.warning("pdf_image_encode_failed", error=str(e))
+
+            if batch_images:
+                vecs = embedder.encode_images(batch_images)
+                retriever = get_retriever()
+                retriever.upsert_batch(batch_ids, vecs, batch_payloads)
+                images_indexed = len(batch_ids)
+
+        return result, chunks_indexed, images_indexed
+
+    with timed("pdf_upload_total") as t:
+        result, chunks_indexed, images_indexed = await loop.run_in_executor(
+            _executor, _process_pdf
+        )
+
+    total_ms = (time.perf_counter_ns() - total_start) / 1_000_000
+
+    _log.info(
+        "pdf_uploaded",
+        filename=file.filename,
+        pages=result.total_pages,
+        chunks=chunks_indexed,
+        images=images_indexed,
+        total_ms=round(total_ms, 2),
+    )
+
+    return PDFUploadResponse(
+        status="indexed",
+        filename=file.filename,
+        total_pages=result.total_pages,
+        chunks_indexed=chunks_indexed,
+        images_indexed=images_indexed,
+        latency_ms=round(total_ms, 2),
+        metadata=result.metadata,
+    )
+
+
+# ── Chat / RAG Endpoint (SSE Streaming) ────────────────────
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    """
+    RAG chat endpoint with Server-Sent Events (SSE) streaming.
+
+    Two-phase response:
+      Phase 1 (event: "retrieval"): Instant retrieval results (<100ms)
+      Phase 2 (event: "token"): Streamed LLM answer tokens
+      Final (event: "done"): Completion signal
+    """
+    import json as _json
+    from services.llm_service.llm import stream_chat
+
+    async def event_generator():
+        retrieval_start = time.perf_counter_ns()
+
+        # ── Phase 1: Retrieval ──────────────────────────────
+        retriever = get_retriever()
+        loop = asyncio.get_event_loop()
+
+        text_results = []
+        image_results = []
+
+        # Search text collection (PDF chunks)
+        try:
+            text_embedder = _text_embedder
+            text_vector = text_embedder.encode_text(request.query)
+            text_results = await loop.run_in_executor(
+                _executor,
+                lambda: retriever.search_text(
+                    query_vector=text_vector,
+                    top_k=request.top_k,
+                    score_threshold=request.score_threshold,
+                    filter_conditions=request.filters,
+                ),
+            )
+        except Exception as e:
+            _log.warning("text_search_failed", error=str(e))
+
+        # Search image collection (if requested)
+        if request.include_images:
+            try:
+                embedder = _active_embedder
+                img_vector = embedder.encode_text(request.query)
+                image_results = await loop.run_in_executor(
+                    _executor,
+                    lambda: retriever.search(
+                        query_vector=img_vector,
+                        top_k=request.top_k,
+                        score_threshold=request.score_threshold,
+                        filter_conditions=request.filters,
+                    ),
+                )
+            except Exception as e:
+                _log.warning("image_search_failed", error=str(e))
+
+        retrieval_ms = (time.perf_counter_ns() - retrieval_start) / 1_000_000
+
+        # Emit Phase 1: retrieval results
+        yield {
+            "event": "retrieval",
+            "data": _json.dumps({
+                "text_results": text_results,
+                "image_results": image_results,
+                "latency_ms": round(retrieval_ms, 2),
+            }),
+        }
+
+        # ── Phase 2: Stream LLM answer ─────────────────────
+        try:
+            async for token in stream_chat(
+                query=request.query,
+                text_chunks=text_results,
+                image_results=image_results,
+            ):
+                yield {
+                    "event": "token",
+                    "data": _json.dumps({"token": token}),
+                }
+        except Exception as e:
+            _log.error("llm_stream_failed", error=str(e))
+            yield {
+                "event": "error",
+                "data": _json.dumps({"error": str(e)}),
+            }
+
+        # ── Done signal ─────────────────────────────────────
+        yield {
+            "event": "done",
+            "data": _json.dumps({"status": "complete"}),
+        }
+
+    return EventSourceResponse(event_generator())
+
+
+# ── List Indexed PDFs ───────────────────────────────────────
+
+@app.get("/pdfs")
+async def list_pdfs():
+    """List all uploaded PDFs."""
+    cfg = get_settings()
+    pdf_dir = Path(cfg.pdf_upload_dir)
+    if not pdf_dir.exists():
+        return {"pdfs": []}
+
+    pdfs = []
+    for f in sorted(pdf_dir.glob("*.pdf")):
+        pdfs.append({
+            "filename": f.name,
+            "size_bytes": f.stat().st_size,
+        })
+    return {"pdfs": pdfs}
+
+
 # ── Health Check ────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
@@ -424,6 +689,11 @@ async def health() -> HealthResponse:
         device = "unknown"
 
     try:
+        text_ok = _text_embedder is not None and _text_embedder.is_ready
+    except Exception:
+        text_ok = False
+
+    try:
         retriever = get_retriever()
         # Quick ping — collection info is cached by Qdrant client
         _ = retriever.collection_info()
@@ -433,11 +703,12 @@ async def health() -> HealthResponse:
 
     redis_ok = redis_available()
 
-    status = "healthy" if (clip_ok and qdrant_ok) else "degraded"
+    status = "healthy" if (clip_ok and qdrant_ok and text_ok) else "degraded"
 
     return HealthResponse(
         status=status,
         clip_loaded=clip_ok,
+        text_embedder_loaded=text_ok,
         qdrant_connected=qdrant_ok,
         redis_connected=redis_ok,
         device=device,
@@ -458,9 +729,15 @@ async def stats() -> StatsResponse:
     except Exception:
         collection = {}
 
+    try:
+        text_collection = retriever.text_collection_info()
+    except Exception:
+        text_collection = {}
+
     return StatsResponse(
         metrics=metrics.snapshot(),
         collection=collection,
+        text_collection=text_collection,
     )
 
 
