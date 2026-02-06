@@ -71,6 +71,7 @@ class HealthResponse(BaseModel):
 
     status: str
     clip_loaded: bool
+    text_embedder_loaded: bool
     qdrant_connected: bool
     redis_connected: bool
     device: str
@@ -81,3 +82,28 @@ class StatsResponse(BaseModel):
 
     metrics: Dict[str, Any]
     collection: Dict[str, Any]
+    text_collection: Optional[Dict[str, Any]] = None
+
+
+# ── PDF RAG Models ──────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    """Chat/RAG request with optional PDF context."""
+
+    query: str
+    top_k: int = 5
+    include_images: bool = True
+    score_threshold: float = 0.2
+    filters: Optional[Dict[str, str]] = None
+
+
+class PDFUploadResponse(BaseModel):
+    """Response from PDF upload + indexing."""
+
+    status: str
+    filename: str
+    total_pages: int
+    chunks_indexed: int
+    images_indexed: int
+    latency_ms: float
+    metadata: Dict[str, Any] = {}
