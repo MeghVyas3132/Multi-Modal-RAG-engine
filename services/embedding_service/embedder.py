@@ -107,7 +107,8 @@ class CLIPEmbedder:
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
             # Move to CPU numpy — Qdrant client expects numpy/list
-            vector = text_features.squeeze(0).cpu().numpy().astype(np.float32)
+            # .float() ensures float32 before numpy (autocast may produce bfloat16)
+            vector = text_features.squeeze(0).cpu().float().numpy()
 
         metrics.record("embedding_latency_ms", t["ms"])
         return vector
@@ -126,7 +127,7 @@ class CLIPEmbedder:
             text_features = self._model.encode_text(tokens)
 
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        return text_features.cpu().numpy().astype(np.float32)
+        return text_features.cpu().float().numpy()
 
     def encode_images(self, images: List) -> np.ndarray:
         """
@@ -145,7 +146,7 @@ class CLIPEmbedder:
             image_features = self._model.encode_image(image_input)
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        return image_features.cpu().numpy().astype(np.float32)
+        return image_features.cpu().float().numpy()
 
     @property
     def preprocess(self):
