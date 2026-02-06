@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import clsx from 'clsx';
-import { User, FileText, Image as ImageIcon, Clock, Zap, AlertCircle } from 'lucide-react';
+import { User, FileText, Image as ImageIcon, Clock, Zap, AlertCircle, BookOpen, Loader2 } from 'lucide-react';
 
 /**
  * Image Result Card - displays a single search result
@@ -188,10 +188,65 @@ const AttachmentItem = ({ file }) => {
     );
 };
 
+/**
+ * Text Results Section - displays retrieved PDF text chunks
+ */
+const TextResultsSection = ({ results, latencyMs }) => {
+    if (!results || results.length === 0) return null;
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[11px] text-gray-500">
+                <BookOpen className="w-3 h-3" />
+                <span>{results.length} text chunks retrieved</span>
+                {latencyMs && (
+                    <>
+                        <span>·</span>
+                        <Zap className="w-3 h-3" />
+                        <span>{latencyMs}ms</span>
+                    </>
+                )}
+            </div>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+                {results.slice(0, 3).map((result, idx) => (
+                    <div key={idx} className="text-[12px] text-gray-600 bg-white border border-gray-100 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-1">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                                Page {result.metadata?.page_num || '?'} · {result.metadata?.source_pdf || 'PDF'}
+                            </span>
+                            <span className="text-[10px] text-gray-300">
+                                {Math.round(result.score * 100)}% match
+                            </span>
+                        </div>
+                        <p className="line-clamp-3">{result.metadata?.text || ''}</p>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+/**
+ * Streaming cursor - animated blinking cursor for active streaming
+ */
+const StreamingCursor = () => (
+    <span className="inline-block w-2 h-5 bg-black/70 ml-0.5 animate-pulse" />
+);
+
 const ChatMessage = ({ message }) => {
     const isUser = message.role === 'user';
     const isError = message.type === 'error';
-    const hasImageResults = message.type === 'image_results' && message.searchResults?.length > 0;
+    const hasImageResults = (message.type === 'image_results' || message.type === 'rag_response' || message.type === 'streaming') 
+        && message.searchResults?.length > 0;
+    const hasTextResults = (message.type === 'rag_response' || message.type === 'streaming')
+        && message.textResults?.length > 0;
+    const isStreaming = message.isStreaming;
+    const isPdfIndexed = message.type === 'pdf_indexed';
+
+    // Determine assistant label
+    const assistantLabel = isPdfIndexed ? 'PDF Processor' 
+        : (message.type === 'rag_response' || message.type === 'streaming') ? 'RAG Assistant'
+        : 'Image Search';
 
     return (
         <div className={clsx(
@@ -203,12 +258,14 @@ const ChatMessage = ({ message }) => {
                 {/* Avatar */}
                 <div className={clsx(
                     "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm transition-all",
-                    isUser ? "bg-white border border-gray-200" : isError ? "bg-red-500" : "bg-black"
+                    isUser ? "bg-white border border-gray-200" : isError ? "bg-red-500" : isPdfIndexed ? "bg-emerald-600" : "bg-black"
                 )}>
                     {isUser ? (
                         <User className="w-4 h-4 text-gray-500" />
                     ) : isError ? (
                         <AlertCircle className="w-4 h-4 text-white" />
+                    ) : isPdfIndexed ? (
+                        <FileText className="w-4 h-4 text-white" />
                     ) : (
                         <div className="w-2 h-2 bg-white rounded-sm" />
                     )}
@@ -217,7 +274,10 @@ const ChatMessage = ({ message }) => {
                 {/* Content */}
                 <div className="flex-1 space-y-3 overflow-hidden">
                     <div className="font-bold text-[14px] text-gray-900 flex items-center gap-2">
-                        {isUser ? "You" : "Image Search"}
+                        {isUser ? "You" : assistantLabel}
+                        {isStreaming && (
+                            <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />
+                        )}
                     </div>
 
                     {/* Attachments if any (for user messages) */}
@@ -231,13 +291,32 @@ const ChatMessage = ({ message }) => {
                         </div>
                     )}
 
-                    {/* Text content */}
-                    <div className={clsx(
-                        "leading-relaxed whitespace-pre-wrap text-[15px] font-medium max-w-none",
-                        isError ? "text-red-700" : "text-gray-800"
-                    )}>
-                        {message.content}
-                    </div>
+                    {/* Retrieved text chunks (shown before LLM answer) */}
+                    {hasTextResults && (
+                        <TextResultsSection
+                            results={message.textResults}
+                            latencyMs={message.latencyMs}
+                        />
+                    )}
+
+                    {/* Text content (LLM answer or status) */}
+                    {message.content && (
+                        <div className={clsx(
+                            "leading-relaxed whitespace-pre-wrap text-[15px] font-medium max-w-none",
+                            isError ? "text-red-700" : "text-gray-800"
+                        )}>
+                            {message.content}
+                            {isStreaming && <StreamingCursor />}
+                        </div>
+                    )}
+
+                    {/* Streaming placeholder when no content yet */}
+                    {isStreaming && !message.content && !hasTextResults && (
+                        <div className="flex items-center gap-2 text-gray-400 text-sm">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Thinking...</span>
+                        </div>
+                    )}
 
                     {/* Image search results grid */}
                     {hasImageResults && (
