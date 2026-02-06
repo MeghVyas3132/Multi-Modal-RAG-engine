@@ -84,54 +84,64 @@ class VectorRetriever:
 
     def ensure_collection(self) -> None:
         """
-        Create the collection if it doesn't exist. Idempotent.
+        Create the image_vectors collection if it doesn't exist. Idempotent.
         Called at startup and by the indexing pipeline.
         """
+        self._ensure_collection_by_name(
+            self._collection, self._vector_dim
+        )
+
+    def ensure_text_collection(self) -> None:
+        """
+        Create the pdf_text_vectors collection if it doesn't exist.
+        Uses text_vector_dim (384 for all-MiniLM-L6-v2).
+        """
+        cfg = get_settings()
+        self._ensure_collection_by_name(
+            cfg.pdf_text_collection, cfg.text_vector_dim
+        )
+
+    def _ensure_collection_by_name(self, name: str, dim: int) -> None:
+        """Create a collection with given name and vector dimension."""
         collections = [c.name for c in self._client.get_collections().collections]
 
-        if self._collection in collections:
-            info = self._client.get_collection(self._collection)
+        if name in collections:
+            info = self._client.get_collection(name)
             _log.info(
                 "collection_exists",
-                name=self._collection,
+                name=name,
                 vectors_count=info.vectors_count,
                 status=info.status.name,
             )
             return
 
-        _log.info("creating_collection", name=self._collection, dim=self._vector_dim)
+        _log.info("creating_collection", name=name, dim=dim)
 
         self._client.create_collection(
-            collection_name=self._collection,
+            collection_name=name,
             vectors_config=VectorParams(
-                size=self._vector_dim,
+                size=dim,
                 distance=Distance.COSINE,
-                # Force all vectors into RAM — no disk-backed segments
                 on_disk=False,
             ),
             hnsw_config=HnswConfigDiff(
                 m=self._hnsw_m,
                 ef_construct=self._hnsw_ef_construct,
-                # Build index in RAM, not on disk
                 on_disk=False,
             ),
             optimizers_config=OptimizersConfigDiff(
-                # Merge segments aggressively for search speed
                 default_segment_number=2,
-                # Flush threshold — keep high to avoid premature flushing
                 memmap_threshold=100_000,
             ),
-            # Scalar quantization: int8 reduces memory ~4x with <1% recall loss.
-            # On 1M vectors * 1024 dim * 4 bytes = ~4GB → ~1GB with quantization.
             quantization_config=ScalarQuantization(
                 scalar=ScalarQuantizationConfig(
                     type="int8",
                     quantile=0.99,
-                    always_ram=True,  # Quantized vectors always in RAM
+                    always_ram=True,
                 ),
             ),
         )
-        _log.info("collection_created", name=self._collection)
+        _log.info("collection_created", name=name)
 
     # ── Search (HOT PATH) ──────────────────────────────────
 
@@ -218,6 +228,80 @@ class VectorRetriever:
             wait=True,  # Wait for indexing to confirm durability
         )
 
+    def upsert_text_batch(
+        self,
+        ids: List[int],
+        vectors: np.ndarray,
+        payloads: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Insert text chunks into the pdf_text_vectors collection.
+        Used by the PDF upload pipeline.
+        """
+        cfg = get_settings()
+        points = [
+            PointStruct(
+                id=int(id_),
+                vector=vec.tolist(),
+                payload=payload,
+            )
+            for id_, vec, payload in zip(ids, vectors, payloads)
+        ]
+
+        self._client.upsert(
+            collection_name=cfg.pdf_text_collection,
+            points=points,
+            wait=True,
+        )
+
+    # ── Text Search (for PDF RAG) ───────────────────────────
+
+    def search_text(
+        self,
+        query_vector: np.ndarray,
+        top_k: int = 5,
+        score_threshold: float = 0.0,
+        filter_conditions: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search the pdf_text_vectors collection for relevant text chunks.
+        Same interface as search() but targets the text collection.
+        """
+        cfg = get_settings()
+
+        qdrant_filter = None
+        if filter_conditions:
+            conditions = [
+                FieldCondition(key=k, match=MatchValue(value=v))
+                for k, v in filter_conditions.items()
+            ]
+            qdrant_filter = Filter(must=conditions)
+
+        with timed("text_vector_search") as t:
+            results = self._client.search(
+                collection_name=cfg.pdf_text_collection,
+                query_vector=query_vector.tolist(),
+                limit=top_k,
+                score_threshold=score_threshold,
+                query_filter=qdrant_filter,
+                search_params=SearchParams(
+                    hnsw_ef=self._hnsw_ef,
+                    quantization=None,
+                ),
+                with_payload=True,
+            )
+
+        metrics.record("text_search_latency_ms", t["ms"])
+
+        return [
+            {
+                "id": str(hit.id),
+                "score": round(hit.score, 4),
+                "metadata": hit.payload or {},
+            }
+            for hit in results
+        ]
+
     # ── Stats ───────────────────────────────────────────────
 
     def collection_info(self) -> Dict[str, Any]:
@@ -231,6 +315,21 @@ class VectorRetriever:
                 "status": info.status.name,
                 "indexed": info.status == CollectionStatus.GREEN,
                 "segments_count": len(info.segments or []) if hasattr(info, 'segments') else None,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def text_collection_info(self) -> Dict[str, Any]:
+        """Return stats for the pdf_text_vectors collection."""
+        cfg = get_settings()
+        try:
+            info = self._client.get_collection(cfg.pdf_text_collection)
+            return {
+                "collection": cfg.pdf_text_collection,
+                "vectors_count": info.vectors_count,
+                "points_count": info.points_count,
+                "status": info.status.name,
+                "indexed": info.status == CollectionStatus.GREEN,
             }
         except Exception as e:
             return {"error": str(e)}
