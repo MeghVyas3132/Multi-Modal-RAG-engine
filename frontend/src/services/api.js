@@ -5,6 +5,8 @@
  * - Text-to-image search
  * - Image-to-image similarity search
  * - Image upload and indexing
+ * - PDF upload and indexing
+ * - RAG chat with SSE streaming
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -158,10 +160,136 @@ export function getImageUrl(metadata) {
     return '';
 }
 
+/**
+ * Upload and index a PDF file
+ * @param {File} pdfFile - PDF file to upload
+ * @param {function} onProgress - Optional progress callback
+ * @returns {Promise<PDFUploadResponse>}
+ */
+export async function uploadPdf(pdfFile, onProgress = null) {
+    const formData = new FormData();
+    formData.append('file', pdfFile);
+
+    const response = await fetch(`${API_BASE_URL}/upload/pdf`, {
+        method: 'POST',
+        body: formData,
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'PDF upload failed' }));
+        throw new Error(error.detail || 'PDF upload failed');
+    }
+
+    return response.json();
+}
+
+/**
+ * Stream RAG chat response via Server-Sent Events
+ * @param {string} query - User question
+ * @param {object} options - Chat options
+ * @param {function} onRetrieval - Callback for Phase 1 retrieval results
+ * @param {function} onToken - Callback for each LLM token
+ * @param {function} onDone - Callback when streaming completes
+ * @param {function} onError - Callback on error
+ * @returns {Promise<void>}
+ */
+export async function streamChat(query, options = {}, { onRetrieval, onToken, onDone, onError } = {}) {
+    const {
+        topK = 5,
+        includeImages = true,
+        scoreThreshold = 0.2,
+        filters = null,
+    } = options;
+
+    const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            query,
+            top_k: topK,
+            include_images: includeImages,
+            score_threshold: scoreThreshold,
+            filters,
+        }),
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Chat request failed' }));
+        throw new Error(error.detail || 'Chat request failed');
+    }
+
+    // Parse SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE messages
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';  // Keep incomplete last line in buffer
+
+        let currentEvent = null;
+        for (const line of lines) {
+            if (line.startsWith('event:')) {
+                currentEvent = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+                const dataStr = line.slice(5).trim();
+                if (!dataStr) continue;
+
+                try {
+                    const data = JSON.parse(dataStr);
+
+                    switch (currentEvent) {
+                        case 'retrieval':
+                            onRetrieval?.(data);
+                            break;
+                        case 'token':
+                            onToken?.(data.token);
+                            break;
+                        case 'done':
+                            onDone?.(data);
+                            break;
+                        case 'error':
+                            onError?.(data.error);
+                            break;
+                        default:
+                            break;
+                    }
+                } catch (e) {
+                    // Skip malformed JSON
+                }
+                currentEvent = null;
+            }
+        }
+    }
+}
+
+/**
+ * List uploaded PDFs
+ * @returns {Promise<{pdfs: Array}>}
+ */
+export async function listPdfs() {
+    const response = await fetch(`${API_BASE_URL}/pdfs`);
+    if (!response.ok) {
+        throw new Error('Failed to list PDFs');
+    }
+    return response.json();
+}
+
 export default {
     searchByText,
     searchByImage,
     uploadImage,
+    uploadPdf,
+    streamChat,
+    listPdfs,
     checkHealth,
     getStats,
     getImageUrl,
