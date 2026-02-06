@@ -47,8 +47,17 @@ tqdm>=4.66.0
 psutil>=5.9.0
 python-dotenv>=1.0.0
 
-# ── LLM (optional) ────────────────────────────────────────
+# ── LLM (Cerebras + Groq via OpenAI-compatible SDK) ───────
 openai>=1.0.0
+
+# ── PDF Processing ────────────────────────────────────────
+PyMuPDF>=1.24.0
+
+# ── Text Embeddings ───────────────────────────────────────
+sentence-transformers>=3.0.0
+
+# ── SSE Streaming ─────────────────────────────────────────
+sse-starlette>=2.0.0
 
 # ── Dev / Testing ─────────────────────────────────────────
 httpx>=0.27.0
