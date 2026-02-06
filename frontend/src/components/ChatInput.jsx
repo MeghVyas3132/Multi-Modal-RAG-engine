@@ -42,7 +42,7 @@ const FilePreview = ({ file, onRemove }) => {
     );
 };
 
-const ChatInput = ({ onSend, disabled }) => {
+const ChatInput = ({ onSend, disabled, centered = false }) => {
     const [input, setInput] = useState('');
     const [files, setFiles] = useState([]);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -100,7 +100,10 @@ const ChatInput = ({ onSend, disabled }) => {
     }, [isMenuOpen]);
 
     return (
-        <div className="w-full max-w-4xl mx-auto px-4 pb-6 pt-2 relative">
+        <div className={clsx(
+            "w-full max-w-4xl mx-auto relative transition-all duration-500 ease-out",
+            centered ? "px-2" : "px-4 pb-6 pt-2"
+        )}>
 
             {/* Hidden Inputs */}
             <input type="file" ref={imageInputRef} className="hidden" accept="image/*" onChange={handleFileChange} multiple />
@@ -169,12 +172,13 @@ const ChatInput = ({ onSend, disabled }) => {
                         value={input}
                         onChange={(e) => {
                             setInput(e.target.value);
-                            e.target.style.height = 'auto';
-                            e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+                            const ta = e.target;
+                            ta.style.height = '0';
+                            ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
                         }}
                         onKeyDown={handleKeyDown}
                         placeholder="Message AI..."
-                        className="flex-1 max-h-48 py-2 px-2 focus:outline-none resize-none bg-transparent text-[15px] text-gray-800 leading-relaxed placeholder-gray-400 border-none ring-0 focus:ring-0 overflow-hidden"
+                        className="flex-1 max-h-48 py-2 px-2 focus:outline-none resize-none bg-transparent text-[15px] text-gray-800 leading-relaxed placeholder-gray-400 border-none ring-0 focus:ring-0 overflow-hidden transition-[height] duration-150 ease-out"
                         style={{ appearance: 'none', WebkitAppearance: 'none' }}
                         rows={1}
                         disabled={disabled}
@@ -195,7 +199,9 @@ const ChatInput = ({ onSend, disabled }) => {
                 </div>
             </div>
             <div className="text-center mt-3">
-                <p className="text-[11px] text-gray-400 font-medium">AI can make mistakes. Consider verifying important information.</p>
+                <p className="text-[11px] text-gray-400 font-medium">
+                    {centered ? '' : 'AI can make mistakes. Consider verifying important information.'}
+                </p>
             </div>
         </div>
     );
