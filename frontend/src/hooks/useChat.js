@@ -6,7 +6,7 @@ import {
     saveUserChats,
     generateSessionToken 
 } from '../data/storageService';
-import { searchByText, searchByImage, uploadImage, getImageUrl } from '../services/api';
+import { searchByText, searchByImage, uploadImage, uploadPdf, streamChat, getImageUrl } from '../services/api';
 
 /**
  * Multi-Tenant Chat Hook with RAG Backend Integration
@@ -175,8 +175,44 @@ const useChat = (userEmail) => {
             let response;
             let botMessage;
 
+            const hasPdfAttachment = attachments.some(file =>
+                file.name?.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf'
+            );
+
+            // If there's a PDF attachment, upload and index it
+            if (hasPdfAttachment) {
+                const pdfFile = attachments.find(f =>
+                    f.name?.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf'
+                );
+
+                if (pdfFile) {
+                    try {
+                        response = await uploadPdf(pdfFile);
+
+                        botMessage = {
+                            id: uuidv4(),
+                            role: 'assistant',
+                            content: `✅ **${response.filename}** indexed successfully!\n\n` +
+                                `📄 ${response.total_pages} pages · ${response.chunks_indexed} text chunks · ${response.images_indexed} images\n` +
+                                `⚡ Processed in ${response.latency_ms}ms\n\n` +
+                                `You can now ask questions about this document.`,
+                            type: 'pdf_indexed',
+                            pdfResult: response,
+                            timestamp: Date.now(),
+                        };
+                    } catch (error) {
+                        botMessage = {
+                            id: uuidv4(),
+                            role: 'assistant',
+                            content: `PDF upload failed: ${error.message}`,
+                            type: 'error',
+                            timestamp: Date.now(),
+                        };
+                    }
+                }
+            }
             // If there's an image attachment, do image-to-image search
-            if (hasImageAttachment && attachments.length > 0) {
+            else if (hasImageAttachment && attachments.length > 0) {
                 const imageFile = attachments.find(f => 
                     f.type?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(f.name)
                 );
@@ -200,28 +236,140 @@ const useChat = (userEmail) => {
                     };
                 }
             } else if (text.trim()) {
-                // Text-to-image search
-                response = await searchByText(text, { 
-                    topK: 6,
-                    includeExplanation: true 
-                });
-
+                // Text query → RAG chat with streaming
+                // Create a placeholder bot message for streaming
+                const botId = uuidv4();
                 botMessage = {
-                    id: uuidv4(),
+                    id: botId,
                     role: 'assistant',
-                    content: response.explanation || `Found ${response.total} images matching "${text}" in ${response.latency_ms}ms`,
-                    type: 'image_results',
-                    searchResults: response.results.map(r => ({
-                        id: r.id,
-                        score: r.score,
-                        imageUrl: getImageUrl(r.metadata),
-                        metadata: r.metadata
-                    })),
-                    query: response.query,
-                    latencyMs: response.latency_ms,
-                    cached: response.cached,
+                    content: '',
+                    type: 'streaming',
+                    textResults: [],
+                    searchResults: [],
+                    latencyMs: null,
+                    isStreaming: true,
                     timestamp: Date.now(),
                 };
+
+                // Add the placeholder immediately
+                setMessages(prev => [...prev, botMessage]);
+                setChats(prev => prev.map(chat => {
+                    if (chat.id === activeId) {
+                        return {
+                            ...chat,
+                            messages: [...chat.messages, botMessage],
+                            updatedAt: Date.now()
+                        };
+                    }
+                    return chat;
+                }));
+
+                // Stream the response
+                let streamedContent = '';
+
+                await streamChat(text, { topK: 5, includeImages: true }, {
+                    onRetrieval: (data) => {
+                        // Phase 1: update with retrieval results
+                        const imageResults = (data.image_results || []).map(r => ({
+                            id: r.id,
+                            score: r.score,
+                            imageUrl: getImageUrl(r.metadata),
+                            metadata: r.metadata
+                        }));
+
+                        setMessages(prev => prev.map(m => {
+                            if (m.id === botId) {
+                                return {
+                                    ...m,
+                                    textResults: data.text_results || [],
+                                    searchResults: imageResults,
+                                    latencyMs: data.latency_ms,
+                                };
+                            }
+                            return m;
+                        }));
+                        setChats(prev => prev.map(chat => {
+                            if (chat.id === activeId) {
+                                return {
+                                    ...chat,
+                                    messages: chat.messages.map(m => {
+                                        if (m.id === botId) {
+                                            return {
+                                                ...m,
+                                                textResults: data.text_results || [],
+                                                searchResults: imageResults,
+                                                latencyMs: data.latency_ms,
+                                            };
+                                        }
+                                        return m;
+                                    }),
+                                    updatedAt: Date.now()
+                                };
+                            }
+                            return chat;
+                        }));
+                    },
+                    onToken: (token) => {
+                        // Phase 2: append token to content
+                        streamedContent += token;
+                        setMessages(prev => prev.map(m => {
+                            if (m.id === botId) {
+                                return { ...m, content: streamedContent };
+                            }
+                            return m;
+                        }));
+                    },
+                    onDone: () => {
+                        // Mark streaming complete
+                        setMessages(prev => prev.map(m => {
+                            if (m.id === botId) {
+                                return {
+                                    ...m,
+                                    content: streamedContent,
+                                    isStreaming: false,
+                                    type: streamedContent ? 'rag_response' : 'image_results',
+                                };
+                            }
+                            return m;
+                        }));
+                        setChats(prev => prev.map(chat => {
+                            if (chat.id === activeId) {
+                                return {
+                                    ...chat,
+                                    messages: chat.messages.map(m => {
+                                        if (m.id === botId) {
+                                            return {
+                                                ...m,
+                                                content: streamedContent,
+                                                isStreaming: false,
+                                                type: streamedContent ? 'rag_response' : 'image_results',
+                                            };
+                                        }
+                                        return m;
+                                    }),
+                                    updatedAt: Date.now()
+                                };
+                            }
+                            return chat;
+                        }));
+                    },
+                    onError: (error) => {
+                        setMessages(prev => prev.map(m => {
+                            if (m.id === botId) {
+                                return {
+                                    ...m,
+                                    content: streamedContent || `Error: ${error}`,
+                                    isStreaming: false,
+                                    type: streamedContent ? 'rag_response' : 'error',
+                                };
+                            }
+                            return m;
+                        }));
+                    },
+                });
+
+                // Already handled — skip the generic add below
+                botMessage = null;
             }
 
             if (botMessage) {
