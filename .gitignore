@@ -43,3 +43,17 @@ htmlcov/
 
 # Logs
 *.log
+
+# Qdrant binary and runtime
+bin/
+qdrant_storage/
+qdrant_snapshots/
+.qdrant-initialized
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/backend/
+
+# Indexing runtime
+nohup.out
