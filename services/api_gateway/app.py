@@ -19,14 +19,17 @@ Architecture decisions:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from configs.settings import get_settings
 from utils.logger import setup_logging, get_logger
@@ -134,6 +137,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Static file serving for image thumbnails ────────────────
+# Serves ./data/** at /images/** so the frontend can render results.
+# e.g. GET /images/test_subset/chocolate_cake/1043216.jpg
+_data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+if _data_dir.exists():
+    app.mount("/images", StaticFiles(directory=str(_data_dir)), name="images")
+    _log.info("static_files_mounted", path=str(_data_dir))
 
 
 # ── Search Endpoint (HOT PATH) ─────────────────────────────
@@ -256,6 +267,144 @@ async def search(request: SearchRequest) -> SearchResponse:
     )
 
     return response
+
+
+# ── Image-to-Image Search ──────────────────────────────────
+
+@app.post("/search/image", response_model=SearchResponse)
+async def search_by_image(
+    file: UploadFile = File(...),
+    top_k: int = 10,
+    score_threshold: float = 0.0,
+) -> SearchResponse:
+    """
+    Upload an image and find visually similar images.
+    Encodes through CLIP vision encoder → HNSW search.
+    """
+    from PIL import Image
+    import io
+
+    total_start = time.perf_counter_ns()
+
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    # Read and preprocess image
+    contents = await file.read()
+    try:
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+
+    embedder = _active_embedder
+    loop = asyncio.get_event_loop()
+
+    # Encode image through CLIP vision encoder (offload to thread pool)
+    def _encode_and_search():
+        preprocessed = embedder.preprocess(img)
+        vec = embedder.encode_images([preprocessed])  # shape (1, dim)
+        query_vector = vec[0]
+
+        retriever = get_retriever()
+        return retriever.search(
+            query_vector=query_vector,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
+
+    with timed("image_search") as t:
+        results = await loop.run_in_executor(_executor, _encode_and_search)
+
+    total_ns = time.perf_counter_ns() - total_start
+    total_ms = total_ns / 1_000_000
+
+    _log.info(
+        "image_search_complete",
+        filename=file.filename,
+        results=len(results),
+        total_ms=round(total_ms, 2),
+    )
+
+    return SearchResponse(
+        query=f"[image: {file.filename}]",
+        results=[SearchResult(**r) for r in results],
+        total=len(results),
+        latency_ms=round(total_ms, 2),
+    )
+
+
+# ── Single Image Upload + Index ─────────────────────────────
+
+@app.post("/upload")
+async def upload_and_index(
+    file: UploadFile = File(...),
+    category: Optional[str] = Form(None),
+):
+    """
+    Upload a single image, encode it with CLIP, and index into Qdrant.
+    Returns immediately — no batch pipeline needed.
+    """
+    from PIL import Image
+    import io
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    contents = await file.read()
+    try:
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+
+    # Save file to disk
+    upload_dir = _data_dir / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    save_path = upload_dir / file.filename
+    save_path.write_bytes(contents)
+
+    embedder = _active_embedder
+    loop = asyncio.get_event_loop()
+
+    def _encode_and_upsert():
+        preprocessed = embedder.preprocess(img)
+        vec = embedder.encode_images([preprocessed])  # shape (1, dim)
+
+        # Deterministic ID from file path
+        path_str = str(save_path)
+        point_id = int(hashlib.md5(path_str.encode()).hexdigest()[:15], 16)
+
+        metadata = {
+            "file_path": str(save_path.relative_to(_data_dir.parent)),
+            "file_name": file.filename,
+            "file_size_bytes": len(contents),
+            "s3_key": f"s3://image-bucket/images/{file.filename}",
+            "width": img.width,
+            "height": img.height,
+        }
+        if category:
+            metadata["category"] = category
+
+        retriever = get_retriever()
+        retriever.upsert_batch([point_id], vec, [metadata])
+        return point_id, metadata
+
+    with timed("upload_index") as t:
+        point_id, metadata = await loop.run_in_executor(_executor, _encode_and_upsert)
+
+    _log.info(
+        "image_uploaded",
+        filename=file.filename,
+        point_id=point_id,
+        index_ms=round(t["ms"], 2),
+    )
+
+    return {
+        "status": "indexed",
+        "id": str(point_id),
+        "metadata": metadata,
+        "latency_ms": round(t["ms"], 2),
+    }
 
 
 # ── Health Check ────────────────────────────────────────────
