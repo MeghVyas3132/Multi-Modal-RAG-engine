@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     """Immutable, validated application settings from environment."""
 
     # ── CLIP ────────────────────────────────────────────────
-    clip_model_name: str = Field(default="ViT-H-14")
-    clip_pretrained: str = Field(default="laion2b_s32b_b79k")
-    clip_vector_dim: int = Field(default=1024)
+    clip_model_name: str = Field(default="ViT-B-32")
+    clip_pretrained: str = Field(default="laion2b_s34b_b79k")
+    clip_vector_dim: int = Field(default=512)
     force_cpu: bool = Field(default=False)
 
     # ── Qdrant ──────────────────────────────────────────────
