@@ -22,7 +22,7 @@ env/
 .env
 
 # Data (do not commit images or vectors)
-data/
+/data/
 *.npy
 *.npz
 
