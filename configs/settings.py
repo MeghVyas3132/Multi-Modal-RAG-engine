@@ -53,9 +53,29 @@ class Settings(BaseSettings):
     index_num_workers: int = Field(default=4)
 
     # ── LLM ─────────────────────────────────────────────────
-    llm_enabled: bool = Field(default=False)
-    llm_model: str = Field(default="gpt-4")
+    llm_enabled: bool = Field(default=True)
+    llm_model: str = Field(default="llama-3.3-70b")
+
+    # ── Cerebras (primary LLM provider) ─────────────────────
+    cerebras_api_key: str = Field(default="", description="Cerebras Cloud API key")
+    cerebras_base_url: str = Field(default="https://api.cerebras.ai/v1")
+
+    # ── Groq (fallback LLM provider) ────────────────────────
+    groq_api_key: str = Field(default="", description="Groq Cloud API key")
+    groq_base_url: str = Field(default="https://api.groq.com/openai/v1")
+
+    # ── OpenAI (legacy, unused) ─────────────────────────────
     openai_api_key: str = Field(default="")
+
+    # ── Text Embeddings (for PDF RAG) ───────────────────────
+    text_model_name: str = Field(default="all-MiniLM-L6-v2", description="Sentence transformer model for text")
+    text_vector_dim: int = Field(default=384, description="Text embedding dimension")
+    pdf_text_collection: str = Field(default="pdf_text_vectors", description="Qdrant collection for PDF text chunks")
+
+    # ── PDF Processing ──────────────────────────────────────
+    pdf_chunk_size: int = Field(default=512, description="Max chars per text chunk")
+    pdf_chunk_overlap: int = Field(default=64, description="Overlap chars between chunks")
+    pdf_upload_dir: str = Field(default="./data/pdfs", description="Directory for uploaded PDFs")
 
     # ── Search defaults ─────────────────────────────────────
     search_top_k: int = Field(default=10)
