@@ -59,6 +59,24 @@ sentence-transformers>=3.0.0
 # ── SSE Streaming ─────────────────────────────────────────
 sse-starlette>=2.0.0
 
+# ── V2: Unified Embeddings (Jina-CLIP v2) ─────────────────
+transformers>=4.40.0
+
+# ── V2: VLM (SmolVLM-500M) ────────────────────────────────
+# Uses transformers + torch (already listed above)
+aiofiles>=24.0.0
+
+# ── V2: Knowledge Graph ───────────────────────────────────
+networkx>=3.1
+
+# ── V2: Web Scraping ──────────────────────────────────────
+langdetect>=1.0.9
+youtube-transcript-api>=0.6.0
+firecrawl-py>=0.1.0
+
+# ── V2: Cross-Encoder Reranker ─────────────────────────────
+# Uses sentence-transformers CrossEncoder (already listed above)
+
 # ── Dev / Testing ─────────────────────────────────────────
 httpx>=0.27.0
 pytest>=8.0.0
