@@ -64,7 +64,7 @@ def setup_telemetry(app: FastAPI) -> None:
 
     resource = Resource.create({
         SERVICE_NAME: cfg.otel_service_name,
-        SERVICE_VERSION: "1.0.0",
+        SERVICE_VERSION: "2.0.0",
         "deployment.environment": "production",
     })
 
@@ -82,7 +82,7 @@ def setup_telemetry(app: FastAPI) -> None:
         )
     )
     trace.set_tracer_provider(tracer_provider)
-    _tracer = trace.get_tracer("clip-image-search", "1.0.0")
+    _tracer = trace.get_tracer("multimodal-rag-engine", "2.0.0")
 
     # ── Metrics ─────────────────────────────────────────────
     metric_exporter = OTLPMetricExporter(endpoint=cfg.otel_endpoint, insecure=True)
@@ -91,7 +91,7 @@ def setup_telemetry(app: FastAPI) -> None:
     )
     meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
     otel_metrics.set_meter_provider(meter_provider)
-    _meter = otel_metrics.get_meter("clip-image-search", "1.0.0")
+    _meter = otel_metrics.get_meter("multimodal-rag-engine", "2.0.0")
 
     # ── Create instruments ──────────────────────────────────
     _search_latency_histogram = _meter.create_histogram(
