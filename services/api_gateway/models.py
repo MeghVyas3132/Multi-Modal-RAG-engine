@@ -75,6 +75,9 @@ class HealthResponse(BaseModel):
     qdrant_connected: bool
     redis_connected: bool
     device: str
+    unified_embedder_loaded: bool = False
+    vlm_loaded: bool = False
+    graph_loaded: bool = False
 
 
 class StatsResponse(BaseModel):
@@ -83,6 +86,9 @@ class StatsResponse(BaseModel):
     metrics: Dict[str, Any]
     collection: Dict[str, Any]
     text_collection: Optional[Dict[str, Any]] = None
+    unified_collection: Optional[Dict[str, Any]] = None
+    cache_stats: Optional[Dict[str, Any]] = None
+    graph_stats: Optional[Dict[str, Any]] = None
 
 
 # ── PDF RAG Models ──────────────────────────────────────────
@@ -93,7 +99,7 @@ class ChatRequest(BaseModel):
     query: str
     top_k: int = 5
     include_images: bool = True
-    score_threshold: float = 0.2
+    score_threshold: float = 0.35
     filters: Optional[Dict[str, str]] = None
 
 
@@ -107,3 +113,65 @@ class PDFUploadResponse(BaseModel):
     images_indexed: int
     latency_ms: float
     metadata: Dict[str, Any] = {}
+
+
+# ── V2: Web Ingestion Models ───────────────────────────────
+
+class WebIndexRequest(BaseModel):
+    """Request to scrape and index a URL."""
+
+    url: str = Field(
+        ...,
+        min_length=1,
+        description="URL to scrape and index",
+        examples=["https://en.wikipedia.org/wiki/Retrieval-augmented_generation"],
+    )
+    recursive: bool = Field(
+        default=False,
+        description="Crawl linked pages (up to max_pages)",
+    )
+    max_pages: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="Max pages to crawl in recursive mode",
+    )
+
+
+class WebIndexResponse(BaseModel):
+    """Response from web URL indexing."""
+
+    status: str
+    url: str
+    title: str
+    source_type: str
+    chunks_indexed: int
+    latency_ms: float
+
+
+# ── V2: Graph Query Models ─────────────────────────────────
+
+class GraphQueryRequest(BaseModel):
+    """Request for graph traversal."""
+
+    entity: str
+    max_hops: int = Field(default=2, ge=1, le=5)
+    max_results: int = Field(default=20, ge=1, le=100)
+
+
+class GraphQueryResponse(BaseModel):
+    """Graph traversal result."""
+
+    entity: str
+    related: List[Dict[str, Any]]
+
+
+# ── V2: VLM Models ─────────────────────────────────────────
+
+class VLMCaptionResponse(BaseModel):
+    """Response from VLM image captioning."""
+
+    caption: str
+    confidence: float
+    model: str
+    latency_ms: float
