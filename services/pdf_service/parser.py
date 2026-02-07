@@ -188,8 +188,10 @@ def parse_pdf(
                         if pix.n > 4:
                             pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                        # Skip tiny images (icons, bullets)
-                        if pix.width < 50 or pix.height < 50:
+                        # Skip small images (icons, bullets, borders, logos).
+                        # 150×150 keeps meaningful diagrams / charts
+                        # while filtering decorative elements.
+                        if pix.width < 150 or pix.height < 150:
                             continue
 
                         all_images.append(ExtractedImage(
