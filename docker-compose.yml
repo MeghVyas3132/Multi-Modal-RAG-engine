@@ -38,7 +38,7 @@ services:
       # OpenTelemetry
       OTEL_ENABLED: "false"
       OTEL_ENDPOINT: "http://otel-collector:4317"
-      OTEL_SERVICE_NAME: "clip-image-search"
+      OTEL_SERVICE_NAME: "multimodal-rag-engine"
       # Auth (disabled for local dev)
       AUTH_ENABLED: "false"
       RATE_LIMIT_ENABLED: "false"
