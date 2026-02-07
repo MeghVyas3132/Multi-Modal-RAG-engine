@@ -5,7 +5,8 @@
 .PHONY: help build up down logs install simulate index serve serve-dev \
         test test-search health stats benchmark clean \
         onnx-convert onnx-benchmark \
-        k8s-apply k8s-delete k8s-staging k8s-prod lint
+        k8s-apply k8s-delete k8s-staging k8s-prod lint \
+        migrate web-index graph-stats cache-stats
 
 SHELL := /bin/zsh
 PYTHON := python3
@@ -83,6 +84,25 @@ stats: ## Get runtime performance stats
 
 benchmark: ## Run search latency benchmark
 	$(PYTHON) -m scripts.benchmark --num-requests 100 --top-k 10
+
+# ── V2: Migration & Management ──────────────────────────────
+
+migrate: ## Migrate legacy collections to unified V2 collection
+	$(PYTHON) -m scripts.migrate_to_unified
+
+migrate-dry: ## Preview migration without changes
+	$(PYTHON) -m scripts.migrate_to_unified --dry-run
+
+web-index: ## Index a URL (usage: make web-index URL=https://example.com)
+	curl -s -X POST http://localhost:8000/web/index \
+		-H "Content-Type: application/json" \
+		-d '{"url": "$(URL)"}' | python3 -m json.tool
+
+graph-stats: ## Show knowledge graph statistics
+	curl -s http://localhost:8000/graph/stats | python3 -m json.tool
+
+cache-stats: ## Show cache statistics (L1/L2/L3)
+	curl -s http://localhost:8000/stats | python3 -m json.tool | grep -A 20 cache
 
 # ── ONNX Runtime ────────────────────────────────────────────
 
