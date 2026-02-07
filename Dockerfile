@@ -1,16 +1,13 @@
 # ================================================================
-# Dockerfile -- Multi-Modal RAG Image Search API
+# Dockerfile -- Multi-Modal RAG Engine V2
 #
 # Multi-stage build:
 #   Stage 1: Install Python dependencies (cached layer)
 #   Stage 2: Copy application code (thin layer, fast rebuilds)
 #
-# The image runs a single uvicorn worker. CLIP model is loaded
-# into memory at startup. Scale horizontally with replicas,
-# not vertically with multiple workers.
-#
-# ONNX Runtime is included for optional accelerated inference.
-# Set USE_ONNX=true and mount the ONNX model to enable.
+# V2 includes: Unified embeddings (Jina-CLIP v2), VLM (SmolVLM),
+# Knowledge Graph, Semantic Cache, Cross-Encoder Reranker,
+# Web Scraping, and Modality Router.
 # ================================================================
 
 FROM python:3.11-slim AS base
