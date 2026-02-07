@@ -1,18 +1,17 @@
 """
 Embedding Service Factory -- runtime backend selection.
 
-The factory inspects settings.use_onnx to determine which embedding
-backend to instantiate. Both backends expose the same interface:
+The factory inspects settings to determine which embedding backend
+to instantiate. Supports three backends:
+  1. UnifiedEmbedder (Jina-CLIP v2, 768d) — single space for text+image
+  2. ONNXCLIPEmbedder — optimized ONNX inference
+  3. CLIPEmbedder (PyTorch) — default fallback
+
+All backends expose the same interface:
   - encode_text(text: str) -> np.ndarray
-  - encode_text_batch(texts: List[str]) -> np.ndarray
   - is_ready: bool
   - vector_dim: int
-  - device: str (torch device or ONNX provider)
-
-Fallback logic:
-  1. If use_onnx=True and ONNX model exists and onnxruntime is installed
-     -> use ONNXCLIPEmbedder
-  2. Otherwise -> fall back to CLIPEmbedder (PyTorch)
+  - device: str
 """
 
 from __future__ import annotations
@@ -25,8 +24,8 @@ from utils.logger import get_logger
 
 _log = get_logger(__name__)
 
-# Type alias for either embedder backend
-EmbedderType = Union["CLIPEmbedder", "ONNXCLIPEmbedder"]  # noqa: F821
+# Type alias for any embedder backend
+EmbedderType = Union["CLIPEmbedder", "ONNXCLIPEmbedder", "UnifiedEmbedder"]  # noqa: F821
 
 
 def create_embedder_auto() -> EmbedderType:
@@ -34,11 +33,12 @@ def create_embedder_auto() -> EmbedderType:
     Factory function: create the appropriate embedder based on settings.
 
     Decision tree:
-      1. Check if USE_ONNX is True
-      2. Check if onnxruntime is importable
-      3. Check if the ONNX model file exists on disk
-      4. If all pass -> ONNXCLIPEmbedder
-      5. Otherwise -> CLIPEmbedder with a warning
+      1. Check if USE_ONNX is True → ONNXCLIPEmbedder
+      2. Otherwise → CLIPEmbedder (PyTorch)
+
+    Note: UnifiedEmbedder is loaded separately at startup via
+    services.embedding_service.unified_embedder.create_unified_embedder()
+    because it serves a different purpose (unified cross-modal space).
 
     Returns:
         An embedder instance (either ONNX or PyTorch backend).
