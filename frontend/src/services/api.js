@@ -283,6 +283,94 @@ export async function listPdfs() {
     return response.json();
 }
 
+
+// ── V2: Web Ingestion ──────────────────────────────────────
+
+/**
+ * Index a web URL — scrapes, chunks, embeds, indexes.
+ * @param {string} url - URL to index
+ * @param {object} options - Options
+ * @returns {Promise<WebIndexResponse>}
+ */
+export async function indexUrl(url, options = {}) {
+    const { recursive = false, maxPages = 1 } = options;
+
+    const response = await fetch(`${API_BASE_URL}/web/index`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            url,
+            recursive,
+            max_pages: maxPages,
+        }),
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'URL indexing failed' }));
+        throw new Error(error.detail || 'URL indexing failed');
+    }
+
+    return response.json();
+}
+
+/**
+ * Search with web grounding — falls back to web if local results are poor.
+ * @param {string} query - Search query
+ * @param {number} threshold - Quality threshold
+ * @returns {Promise<object>}
+ */
+export async function searchWithGrounding(query, threshold = 0.65) {
+    const response = await fetch(
+        `${API_BASE_URL}/web/search-grounding?query=${encodeURIComponent(query)}&threshold=${threshold}`,
+        { method: 'POST' }
+    );
+
+    if (!response.ok) {
+        throw new Error('Web grounding search failed');
+    }
+
+    return response.json();
+}
+
+
+// ── V2: Knowledge Graph ────────────────────────────────────
+
+/**
+ * Get knowledge graph statistics
+ * @returns {Promise<object>}
+ */
+export async function getGraphStats() {
+    const response = await fetch(`${API_BASE_URL}/graph/stats`);
+    if (!response.ok) throw new Error('Graph stats failed');
+    return response.json();
+}
+
+/**
+ * Find entities related to a given entity
+ * @param {string} entity - Entity to look up
+ * @param {number} maxHops - Graph traversal depth
+ * @returns {Promise<object>}
+ */
+export async function findRelated(entity, maxHops = 2) {
+    const params = new URLSearchParams({ entity, max_hops: maxHops });
+    const response = await fetch(`${API_BASE_URL}/graph/related?${params}`);
+    if (!response.ok) throw new Error('Graph query failed');
+    return response.json();
+}
+
+/**
+ * Expand a query with graph entities (for debugging)
+ * @param {string} query - Query to expand
+ * @returns {Promise<object>}
+ */
+export async function expandQuery(query) {
+    const params = new URLSearchParams({ query });
+    const response = await fetch(`${API_BASE_URL}/graph/expand?${params}`);
+    if (!response.ok) throw new Error('Query expansion failed');
+    return response.json();
+}
+
+
 export default {
     searchByText,
     searchByImage,
@@ -293,5 +381,10 @@ export default {
     checkHealth,
     getStats,
     getImageUrl,
-    API_BASE_URL
+    indexUrl,
+    searchWithGrounding,
+    getGraphStats,
+    findRelated,
+    expandQuery,
+    API_BASE_URL,
 };
