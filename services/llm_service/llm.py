@@ -83,8 +83,7 @@ Rules:
 1. Base your answer ONLY on the provided context. If the context doesn't contain relevant information, say so.
 2. Cite page numbers when referencing specific information (e.g. "According to page 3...").
 3. Be concise but thorough. Use bullet points for lists.
-4. If images were retrieved, describe how they relate to the question.
-5. Never fabricate information not present in the context."""
+4. Never fabricate information not present in the context."""
 
 _IMAGE_SYSTEM_PROMPT = """You are an image search assistant. Given a user's search query 
 and a list of retrieved image results with metadata, provide a brief 2-3 sentence 
