@@ -8,7 +8,7 @@ import asyncio
 import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from fastapi import APIRouter, HTTPException
 
@@ -21,6 +21,9 @@ from services.api_gateway.models import WebIndexRequest, WebIndexResponse
 _log = get_logger(__name__)
 router = APIRouter(prefix="/web", tags=["web"])
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="web")
+
+# Hold references to background tasks so they are not garbage-collected
+_background_tasks: Set[asyncio.Task] = set()
 
 
 @router.post("/index", response_model=WebIndexResponse)
@@ -45,12 +48,23 @@ async def index_url(request: WebIndexRequest):
     loop = asyncio.get_event_loop()
 
     def _chunk_embed_index():
-        from services.document_service.semantic_chunker import SemanticChunker
-        chunker = SemanticChunker()
-        chunks = chunker.auto_chunk(
+        from services.document_service.semantic_chunker import auto_chunk
+
+        # Get embedder for semantic chunking (needed for topic-boundary detection)
+        embedder_for_chunking = None
+        if cfg.unified_enabled:
+            try:
+                from services.embedding_service.unified_embedder import get_unified_embedder
+                embedder_for_chunking = get_unified_embedder()
+            except Exception:
+                pass
+
+        chunks = auto_chunk(
             content.content,
+            page_num=1,
             source=request.url,
             modality="text",
+            embedder=embedder_for_chunking,
         )
 
         if not chunks:
@@ -110,9 +124,11 @@ async def index_url(request: WebIndexRequest):
 
     chunks_indexed = await loop.run_in_executor(_executor, _chunk_embed_index)
 
-    # --- Phase 3: Entity extraction (async — fire and forget) ---
+    # --- Phase 3: Entity extraction (async — fire and forget with ref) ---
     if cfg.graph_enabled and chunks_indexed > 0:
-        asyncio.create_task(_extract_entities_async(content, request.url))
+        task = asyncio.create_task(_extract_entities_async(content, request.url))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     elapsed_ms = (time.perf_counter_ns() - total_start) / 1_000_000
 
@@ -129,29 +145,29 @@ async def index_url(request: WebIndexRequest):
 async def _extract_entities_async(content, url: str):
     """Extract entities from web content and add to the knowledge graph."""
     try:
-        from services.document_service.semantic_chunker import SemanticChunker
-        chunker = SemanticChunker()
-        chunks = chunker.auto_chunk(content.content, source=url, modality="text")
+        from services.document_service.semantic_chunker import auto_chunk
+        chunks = auto_chunk(content.content, page_num=1, source=url, modality="text")
         if not chunks:
             return
 
         texts = [c.content for c in chunks[:10]]
 
         from services.graph_service.entity_extractor import extract_entities_batch
-        entities_list = await extract_entities_batch(texts)
+        # extract_entities_batch expects List[Dict] with 'text', 'source', 'chunk_id'
+        chunk_dicts = [
+            {"text": t, "source": url, "chunk_id": f"web:{i}"}
+            for i, t in enumerate(texts)
+        ]
+        entities_list = await extract_entities_batch(chunk_dicts)
 
         from services.graph_service.knowledge_graph import get_knowledge_graph
         graph = get_knowledge_graph()
 
-        for entities_data in entities_list:
-            if entities_data:
-                graph.add_entities(
-                    entities_data.get("entities", []),
-                    source=url,
-                )
-                graph.add_relationships(
-                    entities_data.get("relationships", [])
-                )
+        for entities, relationships in entities_list:
+            if entities:
+                graph.add_entities(entities, source=url)
+            if relationships:
+                graph.add_relationships(relationships)
         graph.save()
     except Exception as e:
         _log.debug("web_entity_extraction_failed", error=str(e))

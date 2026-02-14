@@ -62,8 +62,8 @@ async def scrape_jina(url: str) -> Optional[WebContent]:
     if cfg.jina_api_key:
         headers["Authorization"] = f"Bearer {cfg.jina_api_key}"
 
-    with timed("jina_scrape") as t:
-        try:
+    try:
+        with timed("jina_scrape") as t:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(jina_url, headers=headers)
                 resp.raise_for_status()
@@ -72,25 +72,25 @@ async def scrape_jina(url: str) -> Optional[WebContent]:
             content = data.get("data", {}).get("content", "")
             title = data.get("data", {}).get("title", "")
 
-            if not content or len(content.strip()) < 50:
-                _log.warning("jina_empty_content", url=url)
-                return None
+        metrics.record("jina_scrape_ms", t["ms"])
 
-            return WebContent(
-                url=url,
-                title=title,
-                content=content,
-                content_hash=_content_hash(content),
-                source_type="web",
-                scraped_at=time.time(),
-                metadata={"scraper": "jina", "status_code": resp.status_code},
-            )
-
-        except Exception as e:
-            _log.warning("jina_scrape_failed", url=url, error=str(e))
+        if not content or len(content.strip()) < 50:
+            _log.warning("jina_empty_content", url=url)
             return None
 
-    metrics.record("jina_scrape_ms", t["ms"])
+        return WebContent(
+            url=url,
+            title=title,
+            content=content,
+            content_hash=_content_hash(content),
+            source_type="web",
+            scraped_at=time.time(),
+            metadata={"scraper": "jina", "status_code": resp.status_code},
+        )
+
+    except Exception as e:
+        _log.warning("jina_scrape_failed", url=url, error=str(e))
+        return None
 
 
 # ── Firecrawl (Paid Tier) ──────────────────────────────────

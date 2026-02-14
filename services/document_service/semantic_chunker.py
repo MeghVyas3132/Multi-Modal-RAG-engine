@@ -111,7 +111,12 @@ def chunk_fixed(
             ))
             idx += 1
 
-        start = end - overlap if end < len(text) else len(text)
+        if end < len(text):
+            new_start = end - overlap
+            # Guarantee forward progress — always advance at least 1 char
+            start = max(new_start, start + 1)
+        else:
+            start = len(text)
 
     return chunks
 

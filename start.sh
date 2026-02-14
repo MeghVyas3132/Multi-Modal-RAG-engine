@@ -26,6 +26,10 @@ FRONTEND_LOG="/tmp/frontend.log"
 eval "$(/opt/homebrew/bin/brew shellenv zsh)" 2>/dev/null || true
 export PATH="/opt/homebrew/bin:$PATH"
 
+# HuggingFace: load models from cache only — skip network validation
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 # ── Colors ──────────────────────────────────────────────────
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -202,11 +206,10 @@ do_start() {
             exit 1
         fi
         nohup "$QDRANT_BIN" \
-            --storage-path "$PROJECT_DIR/qdrant_storage" \
             --config-path "$PROJECT_DIR/qdrant_config.yaml" \
             > "$QDRANT_LOG" 2>&1 &
         echo $! > "$QDRANT_PID"
-        wait_for_port 6333 "Qdrant" 15
+        wait_for_port 6333 "Qdrant" 120
     fi
 
     # ── 3. FastAPI ──────────────────────────────────────────
@@ -224,8 +227,8 @@ do_start() {
             --log-level info \
             > "$FASTAPI_LOG" 2>&1 &
         echo $! > "$FASTAPI_PID"
-        info "Loading models (CLIP + MiniLM)... this takes ~15s"
-        wait_for_port 8000 "FastAPI" 60
+        info "Loading models (CLIP + MiniLM + Jina-CLIP)... this takes ~2-3min on CPU"
+        wait_for_port 8000 "FastAPI" 180
     fi
 
     # ── 4. Frontend (Vite) ──────────────────────────────────

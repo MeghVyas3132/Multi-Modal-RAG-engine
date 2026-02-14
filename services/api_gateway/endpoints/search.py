@@ -292,8 +292,12 @@ async def search_by_image(
                 query_vector=vec, top_k=top_k, score_threshold=score_threshold
             )
 
-    with timed("image_search") as t:
-        results = await loop.run_in_executor(_executor, _encode_and_search)
+    try:
+        with timed("image_search") as t:
+            results = await loop.run_in_executor(_executor, _encode_and_search)
+    except Exception as e:
+        _log.error("image_search_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Image search failed: {e}")
 
     total_ms = (time.perf_counter_ns() - total_start) / 1_000_000
 

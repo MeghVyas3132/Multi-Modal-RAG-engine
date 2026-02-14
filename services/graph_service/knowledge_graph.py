@@ -202,17 +202,14 @@ class KnowledgeGraph:
         seen: Set[str] = set()
 
         for start_node in matching_nodes:
-            # BFS traversal up to max_hops
-            for target in nx.single_source_shortest_path_length(
+            # BFS traversal up to max_hops — returns {node: distance}
+            path_lengths = nx.single_source_shortest_path_length(
                 self._graph, start_node, cutoff=max_hops
-            ):
+            )
+            for target, distance in path_lengths.items():
                 if target == start_node or target in seen:
                     continue
                 seen.add(target)
-
-                distance = nx.shortest_path_length(
-                    self._graph, start_node, target
-                )
 
                 # Get relationship type from direct edge (if exists)
                 edge_data = self._graph.get_edge_data(start_node, target) or {}

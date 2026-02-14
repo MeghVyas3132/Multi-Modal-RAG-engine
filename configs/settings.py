@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # ── Unified Embeddings (V2 — single space for text+image)
     unified_enabled: bool = Field(default=True, description="Use unified embedder for cross-modal search")
     unified_model_name: str = Field(default="jinaai/jina-clip-v2", description="Unified text+image model")
-    unified_vector_dim: int = Field(default=768, description="Unified embedding dimension")
+    unified_vector_dim: int = Field(default=1024, description="Unified embedding dimension (Jina-CLIP v2 = 1024)")
     unified_collection: str = Field(default="unified_vectors", description="Single Qdrant collection for all modalities")
     unified_batch_size: int = Field(default=32, description="Batch size for unified encoding")
 

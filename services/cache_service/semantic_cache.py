@@ -256,7 +256,7 @@ class SemanticCache:
             if cfg.unified_enabled:
                 query_vec = embedder.encode_text(query).tolist()
             else:
-                query_vec = embedder.encode(query).tolist()
+                query_vec = embedder.encode_text(query).tolist()
 
             # ANN search in cache collection
             results = self._qdrant_client.search(
@@ -341,7 +341,7 @@ class SemanticCache:
             if cfg.unified_enabled:
                 query_vec = embedder.encode_text(query).tolist()
             else:
-                query_vec = embedder.encode(query).tolist()
+                query_vec = embedder.encode_text(query).tolist()
 
             point = PointStruct(
                 id=str(uuid.uuid4()),

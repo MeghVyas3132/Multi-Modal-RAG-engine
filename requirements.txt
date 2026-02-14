@@ -61,6 +61,7 @@ sse-starlette>=2.0.0
 
 # ── V2: Unified Embeddings (Jina-CLIP v2) ─────────────────
 transformers>=4.40.0
+einops>=0.8.0
 
 # ── V2: VLM (SmolVLM-500M) ────────────────────────────────
 # Uses transformers + torch (already listed above)

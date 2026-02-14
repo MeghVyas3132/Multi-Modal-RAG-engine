@@ -93,8 +93,8 @@ async def extract_entities(
     if client is None:
         return [], []
 
-    with timed("entity_extraction") as t:
-        try:
+    try:
+        with timed("entity_extraction") as t:
             response = await client.chat.completions.create(
                 model=cfg.llm_model,
                 messages=[
@@ -132,12 +132,13 @@ async def extract_entities(
                         "chunk_id": chunk_id,
                     })
 
-            metrics.record("entity_extraction_ms", t["ms"])
-            return entities, valid_rels
+        # t["ms"] is only available AFTER the `with` block exits
+        metrics.record("entity_extraction_ms", t["ms"])
+        return entities, valid_rels
 
-        except Exception as e:
-            _log.warning("entity_extraction_failed", error=str(e))
-            return [], []
+    except Exception as e:
+        _log.warning("entity_extraction_failed", error=str(e))
+        return [], []
 
 
 async def extract_entities_batch(

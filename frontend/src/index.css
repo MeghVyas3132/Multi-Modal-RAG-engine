@@ -17,7 +17,8 @@
 
 @layer base {
   body {
-    @apply m-0 min-w-[320px] min-h-screen text-gray-800 bg-surface;
+    @apply m-0 min-w-[320px] min-h-screen text-gray-800;
+    background-color: #f8f9fb;
   }
 
   /* Soft custom scrollbar */

@@ -3,12 +3,13 @@ Unified Embedding Service — single vector space for text AND images.
 
 Architecture decisions:
   1. Uses sentence-transformers with a CLIP-based model that projects
-     both text and images into the SAME vector space (768-dim).
+     both text and images into the SAME vector space (1024-dim for
+     Jina-CLIP v2, configurable via unified_vector_dim).
   2. This fixes the fundamental V1 problem where CLIP (512-dim) and
      MiniLM (384-dim) lived in different spaces, making cross-modal
      search impossible.
   3. Supports encode_text(), encode_image(), and encode_batch() —
-     all return vectors in the same 768-dim space.
+     all return vectors in the same 1024-dim space.
   4. Falls back to separate CLIP+MiniLM if the unified model can't
      load (e.g., OOM on 16GB Mac).
   5. Singleton pattern matches existing embedders for consistency.

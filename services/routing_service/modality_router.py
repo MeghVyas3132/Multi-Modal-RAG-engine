@@ -72,25 +72,29 @@ _CODE_PATTERNS = re.compile(
 # ── LRU Cache ──────────────────────────────────────────────
 
 class _LRUCache:
-    """Simple thread-safe LRU cache for router decisions."""
+    """Thread-safe LRU cache for router decisions."""
 
     def __init__(self, maxsize: int = 1000) -> None:
+        import threading
         self._cache: OrderedDict[str, Dict[str, float]] = OrderedDict()
         self._maxsize = maxsize
+        self._lock = threading.Lock()
 
     def get(self, key: str) -> Optional[Dict[str, float]]:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        return None
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
 
     def put(self, key: str, value: Dict[str, float]) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._maxsize:
-                self._cache.popitem(last=False)
-        self._cache[key] = value
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            else:
+                if len(self._cache) >= self._maxsize:
+                    self._cache.popitem(last=False)
+            self._cache[key] = value
 
 
 _router_cache = _LRUCache()

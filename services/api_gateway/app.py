@@ -13,15 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from configs.settings import get_settings
@@ -64,30 +65,40 @@ async def lifespan(app: FastAPI):
 
     cfg = get_settings()
 
-    # 1. Load CLIP embedding model (legacy, always needed for backward compat)
-    with timed("startup_clip_load"):
-        from services.embedding_service import create_embedder_auto
-        _active_embedder = create_embedder_auto()
-    _log.info(
-        "embedder_ready",
-        backend="onnx" if cfg.use_onnx else "pytorch",
-        device=str(_active_embedder.device),
-        dim=_active_embedder.vector_dim,
-    )
+    # 1. Load CLIP embedding model (legacy — skip when unified mode saves ~2.5GB RAM)
+    if not cfg.unified_enabled:
+        with timed("startup_clip_load"):
+            from services.embedding_service import create_embedder_auto
+            _active_embedder = create_embedder_auto()
+        _log.info(
+            "embedder_ready",
+            backend="onnx" if cfg.use_onnx else "pytorch",
+            device=str(_active_embedder.device),
+            dim=_active_embedder.vector_dim,
+        )
+    else:
+        _log.info("legacy_clip_skipped", reason="unified_enabled=true")
 
     # 2. Load text embedder (sentence-transformers for PDF RAG)
-    with timed("startup_text_embedder_load"):
-        from services.embedding_service.text_embedder import create_text_embedder
-        _text_embedder = create_text_embedder()
-    _log.info("text_embedder_ready", dim=_text_embedder.vector_dim)
+    #    Skip when unified is enabled — Jina-CLIP v2 handles text too
+    if not cfg.unified_enabled:
+        with timed("startup_text_embedder_load"):
+            from services.embedding_service.text_embedder import create_text_embedder
+            _text_embedder = create_text_embedder()
+        _log.info("text_embedder_ready", dim=_text_embedder.vector_dim)
+    else:
+        _log.info("text_embedder_skipped", reason="unified_enabled=true")
 
     # 3. Connect to Qdrant and ensure legacy collections exist
-    with timed("startup_qdrant_connect"):
-        from services.retrieval_service.retriever import create_retriever
-        retriever = create_retriever()
-        retriever.ensure_collection()
-        retriever.ensure_text_collection()
-    _log.info("qdrant_ready")
+    if not cfg.unified_enabled:
+        with timed("startup_qdrant_connect"):
+            from services.retrieval_service.retriever import create_retriever
+            retriever = create_retriever()
+            retriever.ensure_collection()
+            retriever.ensure_text_collection()
+        _log.info("qdrant_ready")
+    else:
+        _log.info("legacy_qdrant_skipped", reason="unified_enabled=true")
 
     # 4. Initialize Redis cache
     init_cache()
@@ -176,10 +187,13 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# CORS
+# CORS — restrict origins in production via CORS_ORIGINS env var
+_cfg_cors = get_settings()
+_cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
+_cors_origins = [o.strip() for o in _cors_origins if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins or ["http://localhost:5173", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -188,6 +202,17 @@ app.add_middleware(
 _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
 if _data_dir.exists():
     app.mount("/images", StaticFiles(directory=str(_data_dir)), name="images")
+
+# ── Global exception handler (ensures CORS headers on 500s) ─
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    _log.error("unhandled_exception", path=request.url.path, error=str(exc))
+    # Never expose internal error details to clients in production
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 # ── Mount endpoint routers ──────────────────────────────────
 

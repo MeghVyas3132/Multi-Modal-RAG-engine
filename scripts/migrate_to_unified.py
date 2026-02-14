@@ -261,16 +261,19 @@ def build_knowledge_graph(dry_run: bool = False) -> int:
                 sources.append(source)
 
         if texts and not dry_run:
-            entities_list = extract_entities_batch(texts)
-            for entities_data, source in zip(entities_list, sources):
-                if entities_data:
-                    graph.add_entities(
-                        entities_data.get("entities", []),
-                        source=source,
-                    )
-                    graph.add_relationships(
-                        entities_data.get("relationships", [])
-                    )
+            # extract_entities_batch is async — run it properly
+            import asyncio
+            chunk_dicts = [
+                {"text": t, "source": s, "chunk_id": f"migrate:{i}"}
+                for i, (t, s) in enumerate(zip(texts, sources))
+            ]
+            entities_list = asyncio.run(extract_entities_batch(chunk_dicts))
+            # Returns List[Tuple[List[str], List[Dict]]]
+            for (entities, relationships), source in zip(entities_list, sources):
+                if entities:
+                    graph.add_entities(entities, source=source)
+                if relationships:
+                    graph.add_relationships(relationships)
             processed += len(texts)
             _log.info("entities_extracted", batch=len(texts), total=processed)
         elif texts:

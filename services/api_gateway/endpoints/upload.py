@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -25,6 +27,33 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="upload")
 
 _data_dir = Path(__file__).resolve().parent.parent.parent.parent / "data"
 
+# Hold references to background tasks so they are not garbage-collected
+_background_tasks: Set[asyncio.Task] = set()
+
+# Max upload sizes
+_MAX_IMAGE_SIZE = 20 * 1024 * 1024   # 20 MB
+_MAX_PDF_SIZE = 100 * 1024 * 1024    # 100 MB
+
+
+def _sanitize_filename(filename: str) -> str:
+    """
+    Sanitize an uploaded filename to prevent path traversal and
+    other filesystem attacks.  Strips directory components and
+    replaces dangerous characters.
+    """
+    # Take only the basename — strips ../../ and absolute paths
+    filename = os.path.basename(filename)
+    # Remove null bytes
+    filename = filename.replace("\x00", "")
+    # Whitelist: keep only alnum, dots, hyphens, underscores, spaces
+    filename = re.sub(r"[^\w\s\-.]", "_", filename)
+    # Collapse multiple dots/underscores
+    filename = re.sub(r"\.{2,}", ".", filename)
+    filename = filename.strip(". ")
+    if not filename:
+        filename = "upload"
+    return filename
+
 
 @router.post("/upload")
 async def upload_and_index(
@@ -39,14 +68,18 @@ async def upload_and_index(
         raise HTTPException(status_code=400, detail="File must be an image")
 
     contents = await file.read()
+    if len(contents) > _MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=413, detail="Image exceeds 20 MB limit")
     try:
         img = Image.open(io.BytesIO(contents)).convert("RGB")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not decode image")
 
+    safe_filename = _sanitize_filename(file.filename or "image.png")
+
     upload_dir = _data_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
-    save_path = upload_dir / file.filename
+    save_path = upload_dir / safe_filename
     save_path.write_bytes(contents)
 
     cfg = get_settings()
@@ -57,7 +90,7 @@ async def upload_and_index(
         point_id = int(hashlib.md5(path_str.encode()).hexdigest()[:15], 16)
         metadata = {
             "file_path": str(save_path.relative_to(_data_dir.parent)),
-            "file_name": file.filename,
+            "file_name": safe_filename,
             "file_size_bytes": len(contents),
             "width": img.width,
             "height": img.height,
@@ -127,10 +160,17 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
+    safe_filename = _sanitize_filename(file.filename)
+    if not safe_filename.lower().endswith(".pdf"):
+        safe_filename += ".pdf"
+
+    contents = await file.read()
+    if len(contents) > _MAX_PDF_SIZE:
+        raise HTTPException(status_code=413, detail="PDF exceeds 100 MB limit")
+
     pdf_dir = Path(cfg.pdf_upload_dir)
     pdf_dir.mkdir(parents=True, exist_ok=True)
-    save_path = pdf_dir / file.filename
-    contents = await file.read()
+    save_path = pdf_dir / safe_filename
     save_path.write_bytes(contents)
 
     loop = asyncio.get_event_loop()
@@ -145,13 +185,23 @@ async def upload_pdf(file: UploadFile = File(...)):
             # Use semantic chunker for V2
             if cfg.chunking_strategy != "fixed":
                 try:
-                    from services.document_service.semantic_chunker import SemanticChunker
-                    chunker = SemanticChunker()
+                    from services.document_service.semantic_chunker import auto_chunk
+                    # Get embedder for semantic similarity detection
+                    embedder = None
+                    if cfg.unified_enabled:
+                        try:
+                            from services.embedding_service.unified_embedder import get_unified_embedder
+                            embedder = get_unified_embedder()
+                        except Exception:
+                            pass
+
                     full_text = "\n".join(c.text for c in result.chunks)
-                    doc_chunks = chunker.auto_chunk(
+                    doc_chunks = auto_chunk(
                         full_text,
-                        source=file.filename,
+                        page_num=1,
+                        source=safe_filename,
                         modality="text",
+                        embedder=embedder,
                     )
                     texts = [dc.content for dc in doc_chunks]
                 except Exception as e:
@@ -181,14 +231,14 @@ async def upload_pdf(file: UploadFile = File(...)):
                 ids = []
                 payloads = []
                 for i, text in enumerate(texts):
-                    chunk_id_str = f"{file.filename}:chunk:{i}"
+                    chunk_id_str = f"{safe_filename}:chunk:{i}"
                     point_id = int(
                         hashlib.md5(chunk_id_str.encode()).hexdigest()[:15], 16
                     )
                     ids.append(point_id)
                     payloads.append({
                         "text": text,
-                        "source_pdf": file.filename,
+                        "source_pdf": safe_filename,
                         "chunk_index": i,
                         "modality": "text",
                         "type": "text_chunk",
@@ -207,14 +257,14 @@ async def upload_pdf(file: UploadFile = File(...)):
                 ids = []
                 payloads = []
                 for i, text in enumerate(texts):
-                    chunk_id_str = f"{file.filename}:chunk:{i}"
+                    chunk_id_str = f"{safe_filename}:chunk:{i}"
                     point_id = int(
                         hashlib.md5(chunk_id_str.encode()).hexdigest()[:15], 16
                     )
                     ids.append(point_id)
                     payloads.append({
                         "text": text,
-                        "source_pdf": file.filename,
+                        "source_pdf": safe_filename,
                         "chunk_index": i,
                         "type": "text_chunk",
                     })
@@ -231,7 +281,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         # ── Image indexing ──────────────────────────────────
         if result.images:
             images_indexed = _index_pdf_images(
-                result.images, file.filename, cfg
+                result.images, safe_filename, cfg
             )
 
         return result, chunks_indexed, images_indexed, texts if result.chunks else []
@@ -241,17 +291,19 @@ async def upload_pdf(file: UploadFile = File(...)):
             _executor, _process
         )
 
-    # Fire-and-forget entity extraction (properly async)
+    # Fire-and-forget entity extraction (properly async, with task ref)
     if cfg.graph_enabled and extracted_texts:
-        asyncio.create_task(
-            _extract_entities_background(extracted_texts, file.filename)
+        task = asyncio.create_task(
+            _extract_entities_background(extracted_texts, safe_filename)
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     total_ms = (time.perf_counter_ns() - total_start) / 1_000_000
 
     return PDFUploadResponse(
         status="indexed",
-        filename=file.filename,
+        filename=safe_filename,
         total_pages=result.total_pages,
         chunks_indexed=chunks_indexed,
         images_indexed=images_indexed,
@@ -329,18 +381,20 @@ async def _extract_entities_background(texts, source):
         from services.graph_service.entity_extractor import extract_entities_batch
         from services.graph_service.knowledge_graph import get_knowledge_graph
 
-        entities_list = await extract_entities_batch(texts)
+        # extract_entities_batch expects List[Dict] with 'text', 'source', 'chunk_id'
+        chunk_dicts = [
+            {"text": t, "source": source, "chunk_id": f"{source}:chunk:{i}"}
+            for i, t in enumerate(texts)
+        ]
+        entities_list = await extract_entities_batch(chunk_dicts)
         graph = get_knowledge_graph()
 
-        for entities_data in entities_list:
-            if entities_data:
-                graph.add_entities(
-                    entities_data.get("entities", []),
-                    source=source,
-                )
-                graph.add_relationships(
-                    entities_data.get("relationships", [])
-                )
+        # extract_entities_batch returns List[Tuple[List[str], List[Dict]]]
+        for entities, relationships in entities_list:
+            if entities:
+                graph.add_entities(entities, source=source)
+            if relationships:
+                graph.add_relationships(relationships)
 
         graph.save()
     except Exception as e:

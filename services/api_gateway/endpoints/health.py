@@ -80,7 +80,11 @@ async def health() -> HealthResponse:
         except Exception:
             pass
 
-    status = "healthy" if (clip_ok and qdrant_ok and text_ok) else "degraded"
+    # In unified mode, legacy CLIP/text/qdrant are intentionally skipped
+    if cfg.unified_enabled:
+        status = "healthy" if (unified_ok and redis_ok) else "degraded"
+    else:
+        status = "healthy" if (clip_ok and qdrant_ok and text_ok) else "degraded"
 
     return HealthResponse(
         status=status,

@@ -43,21 +43,17 @@ def init_cache() -> bool:
 
     try:
         import redis
-        _redis_client = redis.Redis(
+        pool = redis.ConnectionPool(
             host=cfg.redis_host,
             port=cfg.redis_port,
             db=cfg.redis_db,
+            max_connections=20,
             decode_responses=True,
+        )
+        _redis_client = redis.Redis(
+            connection_pool=pool,
             socket_connect_timeout=2,
             socket_timeout=1,
-            # Connection pooling — reuse connections across requests
-            connection_pool=redis.ConnectionPool(
-                host=cfg.redis_host,
-                port=cfg.redis_port,
-                db=cfg.redis_db,
-                max_connections=20,
-                decode_responses=True,
-            ),
         )
         _redis_client.ping()
         _available = True
